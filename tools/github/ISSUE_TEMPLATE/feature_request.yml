@@ -1,0 +1,20 @@
+name: 💡 Proponer una idea
+description: Una función nueva o una mejora
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problema
+    attributes:
+      label: ¿Qué problema resolvería?
+      placeholder: Cuando edito un stream largo me gustaría…
+    validations:
+      required: true
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: ¿Cómo te imaginas que funcione?
+  - type: textarea
+    id: ejemplos
+    attributes:
+      label: Ejemplos o referencias
+      description: Videos, apps o capturas que lo hagan bien.

@@ -1,0 +1,26 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+httpx>=0.27
+python-multipart>=0.0.9
+numpy>=1.26
+scipy>=1.11
+pillow>=10.0
+
+# IA y video
+faster-whisper>=1.1
+opencv-python-headless>=4.9,<5
+# DLLs de CUDA para Whisper en GPU (Windows/Linux con NVIDIA)
+nvidia-cublas-cu12; platform_system != "Darwin"
+nvidia-cudnn-cu12; platform_system != "Darwin"
+
+# Edición generativa: búsqueda de imágenes y clips de internet
+ddgs>=9.0
+yt-dlp>=2025.1.1
+trafilatura>=1.12
+
+# Opcional: quitar el fondo de tu cara en las miniaturas
+# rembg[gpu]>=2.0
+
+# Pruebas
+pytest>=8

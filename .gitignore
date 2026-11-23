@@ -1,0 +1,51 @@
+# Datos locales de la app (base de datos, miniaturas, copias de videos)
+data/
+
+# Python
+backend/.venv*/
+.venv*/
+.pytest_cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Sistema
+Thumbs.db
+.DS_Store
+
+# Credenciales OAuth descargadas de Google
+client_secret*.json
+
+# Respaldos locales (traen copias de la base de datos con tus sesiones de YouTube/Instagram)
+backups/
+
+# Diagn�sticos y descargas locales
+tools/diag/
+*.log
+.env
+.env.*
+*.gguf
+
+
+# Notas internas de trabajo (se quedan solo en tu PC)
+AGENTS.md
+CLAUDE_ANALISIS_CAMBIOS.md
+docs/AUDITORIA.md
+docs/ESTADO_ACTUAL.md
+docs/PROPUESTA_CLAUDE.md
+docs/contexto-proyecto.md
+
+# Scripts sueltos de prueba
+backend/dbcheck.py
+backend/p12.py
+backend/posts.py
+backend/run_p11.py
+backend/srccheck.py
+backend/ytcheck.py
+
+# Contraseña del túnel
+tools/tunnel/tunnel_pass.txt

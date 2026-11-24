@@ -446,8 +446,9 @@ def zoom_terms(s: dict) -> tuple[list[str], list[dict]]:
         if f["type"] == "punch":
             t0, a = float(f["t"]), float(f["amount"])
             hold = float(f.get("hold") or 1.1)
-            t1 = t0 + PUNCH_IN + hold
-            rise = f"(1-pow(1-clip((t-{t0:.3f})/{PUNCH_IN},0,1),3))"
+            rin = max(0.06, min(3.0, float(f.get("rise") or PUNCH_IN)))  # zoom progresivo (ramp): sube más lento
+            t1 = t0 + rin + hold
+            rise = f"(1-pow(1-clip((t-{t0:.3f})/{rin:.3f},0,1),3))"
             fall = f"clip((t-{t1:.3f})/{PUNCH_OUT},0,1)"
             terms.append(f"{a:.3f}*{rise}*(1-{fall}*{fall}*(3-2*{fall}))")
         else:
@@ -455,7 +456,7 @@ def zoom_terms(s: dict) -> tuple[list[str], list[dict]]:
     return terms, shakes
 
 
-def motion_filter(s: dict, OW: int, OH: int) -> str:
+def motion_filter(s: dict, OW: int, OH: int, fy: float | None = None) -> str:
     """Movimiento dentro del segmento sin cambiar su duración: empuje lento (drift), golpes de zoom que se
     sostienen (punch) y sacudidas cortas y suaves (shake). Escala a tamaños pares (sin temblor de redondeo).
     Devuelve '' si no hay movimiento."""
@@ -471,8 +472,10 @@ def motion_filter(s: dict, OW: int, OH: int) -> str:
         sy = "+".join(f"{amp(f) * 0.7:.1f}*(cos(t*31)+0.45*cos(t*53))*{env(f)}" for f in shakes)
         terms += [f"{amp(f) * 3.2 / OW:.4f}*{env(f)}" for f in shakes]  # margen solo mientras sacude
     F = "1+" + "+".join(terms)
+    # el zoom se centra en la altura de la cara (la cara queda quieta y no se le corta la cabeza)
+    fy = 0.5 if fy is None else max(0.25, min(0.65, float(fy)))
     return (f",scale=w='2*trunc({OW}*({F})/2)':h='2*trunc({OH}*({F})/2)':eval=frame:flags=bicubic,"
-            f"crop={OW}:{OH}:x='max(0,min(iw-{OW},(iw-{OW})/2+({sx})))':y='max(0,min(ih-{OH},(ih-{OH})/2+({sy})))'")
+            f"crop={OW}:{OH}:x='max(0,min(iw-{OW},(iw-{OW})/2+({sx})))':y='max(0,min(ih-{OH},(ih-{OH})*{fy:.3f}+({sy})))'")
 
 
 def crop_rect(sw: int, sh: int, target: float, cx_frac: float, zoom: float,
@@ -547,8 +550,9 @@ def _seg_video_chain(src: str, s: dict, i: int, lay: dict, sw: int, sh: int, OW:
         xexpr = str(x)
         if s.get("track"):  # seguimiento dinámico del rostro (tiempos relativos al segmento)
             xexpr = "'" + track_expr(s["track"], cw, sw, t0=s["src_in"]) + "'"
+        fy = (float(s["face_y"]) * sh - y) / max(ch, 1) if isinstance(s.get("face_y"), (int, float)) else None
         return (f"{src},crop={cw}:{ch}:{xexpr}:{y},scale={OW}:{OH},setsar=1,fps={fps},format=yuv420p"
-                f"{motion_filter(s, OW, OH)}")
+                f"{motion_filter(s, OW, OH, fy)}")
     if mode == "split":
         gm = split_geometry(sw, sh, OW, OH, lay)
         cw, ch, cx, cy = gm["cam"]
@@ -1071,6 +1075,15 @@ def render_to_file(p: dict, req_q: str, out: Path, work: Path, progress, qa_kind
     """Renderiza un proyecto (o un clip armado como proyecto) a `out`: separación de voz si hace falta,
     FFmpeg, volumen -14 LUFS y control de calidad. Motor único para clips, YouTube, temas y Studio."""
     work.mkdir(parents=True, exist_ok=True)
+    pre = None
+    if do_qa:  # revisión preventiva: arregla lo seguro (textos colgados) en la copia que se renderiza
+        from . import precheck
+        try:
+            tgt = ((p.get("source_meta") or {}).get("brief") or {}).get("target_duration")
+            tl_fixed, pre = precheck.check(p, float(tgt) if isinstance(tgt, (int, float)) and tgt else None)
+            p = {**p, "timeline": tl_fixed}
+        except Exception as exc:  # noqa: BLE001 — la revisión nunca impide renderizar
+            pre = {"issues": [], "fixed": [], "error": str(exc)[:160]}
     st_p, tl_p = p["style"], p["timeline"]
     mode = st_p.get("voice_mode", "original")
     stems_info = None
@@ -1137,6 +1150,8 @@ def render_to_file(p: dict, req_q: str, out: Path, work: Path, progress, qa_kind
         qa_rep = qa.check(out, media.probe(out)["duration"], dur, kind=kind,
                           captions=bool((tl_p.get("captions") or {}).get("enabled")) and st_p.get("caption_style") != "none",
                           words=tl_p.get("words") or [], has_audio=bool(p["source_meta"].get("has_audio", True)))
+    if pre and (pre.get("issues") or pre.get("fixed")):
+        qa_rep = {**(qa_rep or {}), "precheck": pre}
     return {"encoder": enc, "duration": dur, "qa": qa_rep, "audio": audio_rep, "stems": stems_mod_public(stems_info)}
 
 

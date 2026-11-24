@@ -140,11 +140,13 @@ def style_for(p: dict, b: dict) -> tuple[dict, dict]:
             "callouts_per_min", "music_volume")
     if learned:
         st = {**base, **learned}
+        measured = st.get("zoom_kind") in ("punch", "ramp", "none")  # zooms medidos en la referencia: se respetan
         if b["video_type"] == "long":
-            for k in ("zoom_amount", "sfx_density", "sfx_per_min", "callouts_per_min", "music_volume"):
+            for k in ("sfx_density", "sfx_per_min", "callouts_per_min", "music_volume") + (() if measured else ("zoom_amount",)):
                 st[k] = min(float(st.get(k) or 0), float(preset[k]) * 1.6) if k != "zoom_amount" else \
                     min(float(st.get(k) or 1), preset["zoom_amount"] + 0.04)
-            st["zoom_every"] = max(int(st.get("zoom_every") or 1), preset["zoom_every"] - 1)
+            if not measured:
+                st["zoom_every"] = max(int(st.get("zoom_every") or 1), preset["zoom_every"] - 1)
             if st.get("transition_style") == "dinamico":
                 st["transition_style"] = "suave"
             st["silence_threshold"] = max(float(st.get("silence_threshold") or 0), preset["silence_threshold"] - 0.1)

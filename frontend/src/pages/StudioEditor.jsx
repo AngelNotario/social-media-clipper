@@ -104,7 +104,8 @@ export default function StudioEditor({ pid, notify }) {
           if (w.kind === 'studio_autoedit') {
             const r = j.result
             notify(`Edición lista: ${r.segments} cortes, ${r.removed_seconds}s de silencios y muletillas eliminados`)
-            if (r.ai?.generative || r.ai?.sound || r.ai?.instructions) setReport({ ai: r.ai })
+            if (r.ai?.warning) notify(r.ai.warning, 'error')
+            if (r.ai?.generative || r.ai?.sound || r.ai?.instructions || r.ai?.warning) setReport({ ai: r.ai })
             if (view === 'render') render('preview')
           }
           if (w.kind === 'studio_reference') notify(`Ritmo aplicado: ${j.result.cuts_per_min} cortes/min. Pulsa “Auto-editar de nuevo” para usarlo.`)
@@ -303,6 +304,8 @@ export default function StudioEditor({ pid, notify }) {
                       const f = (x) => `${Math.floor(x / 60)}:${String(Math.round(x % 60)).padStart(2, '0')}`
                       return <p className="small">⏱️ Duración: {c.removed_blocks ? `${f(c.before)} → ${f(c.after)} (pediste ${f(c.target)}; quité ${c.removed_blocks} de ${c.blocks} partes, elegidas por ${c.method})` : `${f(c.before)}: ${c.note || 'sin recortar'}`}</p>
                     })()}
+                    {report.ai?.warning && <p className="error-text small">⚠ {report.ai.warning}</p>}
+                    {report.ai?.reference_zooms > 0 && <p className="small">🔍 {report.ai.reference_zooms} zooms puestos en tus momentos de énfasis, con la intensidad y duración de tu referencia</p>}
                     {report.ai?.sound && !report.ai.sound.error && <p className="small">🎧 Sonido: {report.ai.sound.summary}</p>}
                     {report.ai?.instructions?.error && <p className="error-text small">Tus instrucciones no se pudieron aplicar: {report.ai.instructions.error}</p>}
                     {report.ai?.instructions?.message && <p className="small">📝 Instrucciones: {report.ai.instructions.message}</p>}

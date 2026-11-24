@@ -87,8 +87,9 @@ def stylize(tl: dict, st: dict, seed: str = "") -> None:
     for i, s in enumerate(segs):
         ln = s["src_out"] - s["src_in"]
         if not s.get("rect"):
-            s["zoom"] = zoom_amt if zoom_amt > 1.0 and (i // every) % 2 == 1 else 1.0
-            if ln >= 3.5:  # plano largo: empuje lento (alterna acercar / alejar)
+            measured = st.get("zoom_kind") in ("punch", "ramp", "none")
+            s["zoom"] = zoom_amt if zoom_amt > 1.0 and not measured and (i // every) % 2 == 1 else 1.0
+            if ln >= 3.5 and not measured:  # plano largo: empuje lento (alterna acercar / alejar)
                 s["drift"] = 0.07 if (i % 2 == 0) else -0.05
         s["transition"] = "cut"
         if i and s.get("scene_start") and pattern:
@@ -117,6 +118,12 @@ Tipos de evento:
   suspenso (antes de un momento tenso; suena justo antes), exito (logro, dato bueno), transicion (cambio de tema).
   Solo si el momento lo pide de verdad. NUNCA sonidos en frases normales.
 - "cam": zoom a la cámara del streamer para ver su reacción (risa, grito, sorpresa). {cam_rule}
+Criterio de editor profesional (estilo OpusClip / CapCut pro):
+- Gancho: en los primeros 3 s, si se dice algo fuerte, márcalo (punch o callout); nunca dejes el inicio "plano".
+- Pon el evento en el tiempo de inicio de la PALABRA clave del remate (no a mitad de la frase ni después).
+- El punch se sostiene hasta el final de esa frase; no lo uses para "dar movimiento" a frases normales.
+- Solo los momentos más fuertes del tramo; si dudas entre poner o no, no pongas.
+- Varía: no repitas el mismo meme, el mismo sonido o el mismo tipo de evento tres veces seguidas.
 Usa los tiempos exactos del timeline. No pongas dos textos a menos de 3 s ni dos sonidos a menos de 4 s.
 Si "sonidos_que_usa_tu_estilo" trae tipos, son los que usan los videos que el creador quiere imitar: prefiérelos.
 Responde solo JSON.
@@ -264,7 +271,7 @@ def _add_fx(tl: dict, t: float, kind: str, amount: float, gap: float = 0.8, hold
     return True
 
 
-def finalize_holds(tl: dict) -> None:
+def finalize_holds(tl: dict, max_hold: float = 2.2) -> None:
     """Cada golpe de zoom se sostiene hasta el final de la frase (como un editor), sin pisar el siguiente
     efecto ni salirse del segmento."""
     from .render import PUNCH_IN, PUNCH_OUT
@@ -286,7 +293,7 @@ def finalize_holds(tl: dict) -> None:
                     break
             nxt_fx = fx[i + 1]["t"] if i + 1 < len(fx) else 1e9
             room = min(nxt_fx - f["t"] - PUNCH_IN - PUNCH_OUT - 0.1, ln - f["t"] - PUNCH_IN - PUNCH_OUT - 0.05)
-            f["hold"] = round(max(0.35, min(2.2, want, room)), 2)
+            f["hold"] = round(max(0.35, min(max_hold, want, room)), 2)
 
 
 def direct(tl: dict, st: dict, curve: list[tuple[float, float]], voice_curve: list[tuple[float, float]] | None,
@@ -386,10 +393,14 @@ def direct(tl: dict, st: dict, curve: list[tuple[float, float]], voice_curve: li
         sfx_times.append(t)
         return True
 
+    zkind = st.get("zoom_kind")
+    p_amt = max(0.03, min(0.4, float(st.get("zoom_amount") or 1.11) - 1.0)) if zkind in ("punch", "ramp") else 0.11
     for e in events:
         t, typ = e["t"], e["type"]
+        if typ == "punch" and zkind == "none":
+            continue  # tu referencia no usa zooms
         if typ == "punch":
-            if _add_fx(tl, t, "punch", 0.11, gap=2.8):
+            if _add_fx(tl, t, "punch", p_amt, gap=2.8):
                 stats["punch"] += 1
         elif typ == "shake":
             if _add_fx(tl, t, "shake", 0.16, gap=2.8):
@@ -416,14 +427,14 @@ def direct(tl: dict, st: dict, curve: list[tuple[float, float]], voice_curve: li
                                          "text": text[:40], "kind": kind})
             text_times.append(t)
             stats[typ] += 1
-            if typ == "meme":
-                _add_fx(tl, t, "punch", 0.08, gap=1.5)
+            if typ == "meme" and zkind != "none":
+                _add_fx(tl, t, "punch", min(0.08, p_amt), gap=1.5)
                 add_sound("texto", t)
         elif typ == "sfx":
             role = e.get("sound") if e.get("sound") in SOUND_ROLES else "impacto"
             if add_sound(role, t):
                 stats["sfx"] += 1
-    finalize_holds(tl)
+    finalize_holds(tl, max(2.2, float(st.get("zoom_hold_s") or 0) * 1.5))
     return stats
 
 

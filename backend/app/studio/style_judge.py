@@ -84,6 +84,9 @@ def reference_targets(style_id: int | None) -> dict | None:
         mr = float(sp["music_ratio"])
         music = "no" if mr < 0.15 else ("tenue" if mr < 0.5 else "sí")
     zoom = _f(el.get("zoom_per_min"))
+    zm = prof.get("zoom") or {}
+    if (_f(zm.get("confidence")) or 0) >= 0.4:  # zooms medidos (cámara) mandan sobre la pista de la IA de visión
+        zoom = _f(zm.get("zoom_per_min"))
     ovm = _f(el.get("overlays_per_min"))
     vis = max([v for v in (cuts, ovm) if v is not None], default=None)  # la detección de escenas ya cuenta el b-roll
     # sfx_on_cuts_ratio: si el estilo aprendido sincroniza sonidos con cortes, el ratio esperado es alto
@@ -98,7 +101,9 @@ def reference_targets(style_id: int | None) -> dict | None:
             "pip_ratio": _f(el.get("pip_ratio")), "speaker_visible_ratio": _f(el.get("speaker_visible_ratio")),
             "text_per_min": _f(el.get("labels_per_min")), "captions_ratio": _f(d.get("captions_ratio")),
             "cuts_per_min": cuts, "zoom_per_min": zoom, "sfx_per_min": sfx, "sfx_on_cuts_ratio": sfx_on_cuts,
-            "music": music, "memes_ratio": _f(el.get("memes_ratio"))}
+            "music": music, "memes_ratio": _f(el.get("memes_ratio")),
+            "zoom_amount": _f(zm.get("amount")) if (_f(zm.get("confidence")) or 0) >= 0.4 else None,
+            "zoom_hold_s": _f(zm.get("hold_s")) if (_f(zm.get("confidence")) or 0) >= 0.4 else None}
 
 
 def preset_targets(video_type: str | None, edit_style: str | None) -> dict:

@@ -25,6 +25,20 @@ def llm_ready() -> bool:
     return st["available"] and cfg["model"] in st["models"]
 
 
+def llm_warning() -> str | None:
+    """Aviso legible si la IA de texto no está disponible (la edición sigue, pero con reglas básicas)."""
+    cfg = _llm_cfg()
+    st = llm.status(cfg["url"])
+    eng = "llama.cpp" if st.get("backend") == "llamacpp" else "Ollama"
+    if not st["available"]:
+        return (f"{eng} no responde: la edición se hizo SIN IA (solo reglas básicas: sin títulos, textos ni recursos "
+                f"inteligentes). Abre {eng} y pulsa «Auto-editar de nuevo».")
+    if cfg["model"] not in st["models"]:
+        return (f"El modelo «{cfg['model']}» no está instalado en {eng}: la edición se hizo sin IA. "
+                "Elige otro modelo en Configuración o descárgalo.")
+    return None
+
+
 def transcript_lines(tl: dict, max_chars: int = 9000) -> str:
     """Transcripción en tiempo del timeline, agrupada en frases."""
     lines, cur, t0 = [], [], None
@@ -507,6 +521,11 @@ Devuelve SOLO JSON con:
 - "broll": recursos de tipo broll del catálogo que ilustren lo que se dice (solo si encajan de verdad; 2-6 s cada uno; puede ir vacío).
 - "music_asset_id": id de una música del catálogo que encaje con el tono (omítelo si no hay música adecuada).
 - "emphasis": momentos de énfasis fuerte para un efecto de sonido (time) con "sfx_asset_id" de tipo sfx (impacto, pop, ding, riser...). Máximo {m}.
+Reglas de editor profesional:
+- Cada callout usa el tiempo exacto en que empieza a decirse esa palabra o cifra, con las MISMAS palabras que se dicen.
+- Deja al menos 3 s entre textos y al menos 4 s entre efectos de sonido; mejor pocos y fuertes que muchos.
+- Un broll ilustra la frase concreta que se dice en ese momento (no el tema general del video).
+- El título resume el gancho real del video; nada de clickbait que el video no cumple.
 No inventes ids que no estén en el catálogo."""
 
 
@@ -671,8 +690,19 @@ def enrich(tl: dict, st: dict, progress: Callable[[float, str], None] = lambda p
     if title:
         ops.append({"op": "add_text", "start": 0.0, "end": min(3.0, dur), "text": title, "kind": "title"})
     dropped = 0
-    for c in (data.get("callouts") or [])[:n_callouts]:
+    text_at: list[float] = []
+    sfx_at: list[float] = []
+    emph_ok = []  # los sonidos de énfasis (elegidos por la IA) tienen prioridad sobre el "pop" de los textos
+    for e in (data.get("emphasis") or [])[:max(1, n_callouts // 2)]:
+        te = float(e.get("time", 0) or 0)
+        if e.get("sfx_asset_id") and all(abs(te - x) >= 4.0 for x in sfx_at):
+            sfx_at.append(te)
+            emph_ok.append(e)
+    for c in sorted((data.get("callouts") or [])[:n_callouts], key=lambda x: float(x.get("start", 0) or 0)):
         if c.get("start", 0) < 2.8:  # no tapar el título
+            continue
+        if any(abs(float(c["start"]) - x) < 3.0 for x in text_at):
+            dropped += 1  # dos textos pegados se pisan: mínimo 3 s entre textos
             continue
         if not callout_is_said(tl, str(c.get("text", "")), float(c.get("start", 0))):
             dropped += 1  # la IA puso algo que no se dice ahí: fuera
@@ -681,8 +711,10 @@ def enrich(tl: dict, st: dict, progress: Callable[[float, str], None] = lambda p
         # videos largos: rótulo pequeño abajo (no un texto gigante encima de tu cara)
         ops.append({"op": "add_text", "start": c["start"], "end": max(end, c["start"] + (2.5 if long_video else 1.2)),
                     "text": c.get("text", ""), "kind": "lower" if long_video else "callout"})
-        if pop and not long_video:
+        text_at.append(float(c["start"]))
+        if pop and not long_video and all(abs(float(c["start"]) - x) >= 4.0 for x in sfx_at):
             ops.append({"op": "add_sfx", "asset_id": pop["id"], "time": c["start"], "volume": 0.5})
+            sfx_at.append(float(c["start"]))
     allowed_vids = {r["video_id"] for r in broll_rows}
     for b in data.get("broll") or []:
         if b.get("video_id") and b["video_id"] not in allowed_vids:
@@ -695,9 +727,8 @@ def enrich(tl: dict, st: dict, progress: Callable[[float, str], None] = lambda p
         pass
     elif mid and any(a["id"] == mid for a in music):  # solo una música que la IA eligió por el tono; nunca "la primera"
         ops.append({"op": "add_music", "asset_id": mid, "start": 0.0, "end": dur, "volume": st["music_volume"]})
-    for e in (data.get("emphasis") or [])[:max(1, n_callouts // 2)]:
-        if e.get("sfx_asset_id"):
-            ops.append({"op": "add_sfx", "asset_id": e["sfx_asset_id"], "time": e["time"], "volume": 0.6})
+    for e in emph_ok:
+        ops.append({"op": "add_sfx", "asset_id": e["sfx_asset_id"], "time": e["time"], "volume": 0.6})
     _, notes = apply_ops(tl, st, ops)
     if broll_rows and every:  # completa el ritmo pedido con tramos de los videos adjuntos
         want = int(dur // every)

@@ -24,6 +24,9 @@ DEFAULT_STYLE = {
     "remove_fillers": True,
     "zoom_amount": 1.12,               # zoom de los cortes "punch-in"
     "zoom_every": 1,                   # cada cuántos segmentos alterna el zoom
+    "zoom_per_min": 0.0,               # zooms por minuto medidos en tu referencia (0 = no medido)
+    "zoom_hold_s": 0.0,                # cuánto se mantiene cada zoom (s) en tu referencia
+    "zoom_kind": "",                   # punch (golpe) | ramp (progresivo) | none — "" = no medido
     "sfx_density": 0.35,               # probabilidad de whoosh en cambios de plano (0-1)
     "callouts_per_min": 4,             # textos destacados por minuto (IA)
     "transition_style": "dinamico",    # dinamico (zoom/destello/glitch/barrido) | suave (fundidos) | cortes
@@ -53,7 +56,7 @@ HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 LIMITS = {
     "caption_size": (56, 140), "caption_max_words": (1, 8), "silence_threshold": (0.15, 2.0),
-    "zoom_amount": (1.0, 1.5), "zoom_every": (1, 6), "sfx_density": (0.0, 1.0),
+    "zoom_amount": (1.0, 1.5), "zoom_every": (1, 6), "zoom_per_min": (0.0, 30.0), "zoom_hold_s": (0.0, 8.0), "sfx_density": (0.0, 1.0),
     "callouts_per_min": (0, 12), "sfx_per_min": (0.0, 60.0), "music_volume": (0.0, 1.0), "voice_volume": (0.2, 2.0), "broll_volume": (0.0, 1.0),
 }
 CHOICES = {
@@ -62,6 +65,7 @@ CHOICES = {
     "transition_style": {"dinamico", "suave", "cortes"},
     "broll_fit": {"cover", "blur"},
     "voice_mode": {"original", "realzar", "solo_voz"},
+    "zoom_kind": {"", "punch", "ramp", "none"},
 }
 
 

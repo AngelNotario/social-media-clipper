@@ -877,6 +877,16 @@ def delete_ref_cookies():
     return ref_cookies()
 
 
+@router.post("/styles/{sid}/zooms")
+def style_measure_zooms(sid: int):
+    """Mide los zooms reales de los videos de un estilo ya aprendido (sin repetir el análisis completo)."""
+    learn.ensure_schema()
+    with db.get_conn() as conn:
+        if not conn.execute("SELECT 1 FROM learned_styles WHERE id = ?", (sid,)).fetchone():
+            raise HTTPException(404, "Estilo no encontrado.")
+    return jobs.enqueue("studio_zooms", params={"style_id": sid})
+
+
 @router.delete("/styles/{sid}")
 def delete_style(sid: int):
     learn.ensure_schema()
@@ -974,3 +984,4 @@ jobs.HANDLERS["studio_voice_test"] = run_voice_test
 jobs.HANDLERS["studio_footage"] = footage.run_index
 jobs.HANDLERS["studio_topic"] = topic.run_topic
 jobs.HANDLERS["studio_learn"] = learn.run_learn
+jobs.HANDLERS["studio_zooms"] = learn.run_measure_zooms

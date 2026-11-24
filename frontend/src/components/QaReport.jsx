@@ -3,7 +3,21 @@ const VERDICT = { listo: 'Listo para publicar', revisar: 'Conviene revisar', reh
 
 const tc = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
 
+function Precheck({ pre }) {
+  if (!pre || (!pre.issues?.length && !pre.fixed?.length)) return null
+  return (
+    <div className="small mt">
+      <b>Revisión antes de renderizar</b>
+      <ul className="qa-list">
+        {pre.issues.map((i, k) => <li key={`i${k}`} className={`sev-${i.level === 'error' ? 'alta' : 'media'}`}><span className="small">⚠ {i.msg}</span></li>)}
+        {pre.fixed.map((f, k) => <li key={`f${k}`}><span className="small muted">✓ Arreglado: {f}</span></li>)}
+      </ul>
+    </div>
+  )
+}
+
 export default function QaReport({ qa, audio, onSeek }) {
+  if (qa && qa.score == null && qa.precheck) return <details className="qa qa-warn" open><summary className="small">Revisión antes de renderizar</summary><Precheck pre={qa.precheck} /></details>
   if (!qa || qa.score == null) return null
   const cls = qa.verdict === 'listo' ? 'qa-ok' : qa.verdict === 'revisar' ? 'qa-warn' : 'qa-bad'
   return (
@@ -28,6 +42,7 @@ export default function QaReport({ qa, audio, onSeek }) {
             ))}
           </ul>
         )}
+      <Precheck pre={qa.precheck} />
     </details>
   )
 }

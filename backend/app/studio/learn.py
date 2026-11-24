@@ -249,6 +249,14 @@ def analyze(path: Path, progress) -> dict:
     out["scene_events"] = [{"t": round(a, 3), "end": round(b, 3), "type": "scene"}
                            for a, b in zip([0.0] + scenes, scenes + [win]) if b - a >= 0.1]
 
+    # Zooms reales (cámara que se acerca/aleja dentro de una toma), no adivinados por la IA de visión
+    progress(0.12, "Detectando zooms de cámara")
+    try:
+        from . import zoom_detect
+        out["zoom"] = zoom_detect.detect(path, 0, win, scene_cuts=scenes)
+    except Exception as exc:  # noqa: BLE001 - el análisis sigue aunque falle la detección
+        out["zoom"] = {"events": [], "zoom_per_min": 0.0, "confidence": 0.0, "error": str(exc)[:120]}
+
     if meta["has_audio"]:
         progress(0.2, "Escuchando: voz, pausas, música y efectos")
         wav = work / "a.wav"
@@ -476,12 +484,19 @@ def build_edl(prof: dict) -> list[dict]:
         if ev.get("text_on_screen"):
             add(t, "text", text_kind=ev.get("text_kind"))
 
+    # Zooms reales medidos (golpe o progresivo, con intensidad y duración)
+    zm = prof.get("zoom") or {}
+    measured_zoom = (zm.get("confidence") or 0) >= 0.4
+    for ev in zm.get("events") or [] if measured_zoom else []:
+        add(ev["t0"], "zoom", end=ev.get("t1"), kind=ev.get("kind"), dir=ev.get("dir"),
+            amount=ev.get("amount"), hold_s=ev.get("hold_s"))
+
     # Diseño de fotograma (subtítulos, layout, zoom, emojis, gráficos)
     for ev in prof.get("design_events") or []:
         t = ev.get("t")
         if ev.get("layout"):
             add(t, "layout", layout=ev.get("layout"))
-        if ev.get("zoomed_in"):
+        if ev.get("zoomed_in") and not measured_zoom:
             add(t, "zoom")
         if ev.get("captions"):
             add(t, "caption_design", position=ev.get("caption_position"),
@@ -498,6 +513,20 @@ def build_edl(prof: dict) -> list[dict]:
     return events
 
 
+def zoom_fields(prof: dict) -> dict:
+    """Ajustes de zoom medidos en la referencia (ritmo, intensidad, duración). Vacío si no hay medición fiable."""
+    z = prof.get("zoom") or {}
+    if (z.get("confidence") or 0) < 0.4:
+        return {}
+    rate = float(z.get("zoom_per_min") or 0)
+    if rate < 0.3:
+        # La referencia no hace zooms: el estilo tampoco
+        return {"zoom_per_min": 0.0, "zoom_kind": "none", "zoom_amount": 1.0, "zoom_hold_s": 0.0}
+    return {"zoom_per_min": round(rate, 2), "zoom_kind": z.get("kind") or "punch",
+            "zoom_amount": round(max(1.03, min(1.5, float(z.get("amount") or 1.12))), 3),
+            "zoom_hold_s": round(max(0.3, min(8.0, float(z.get("hold_s") or 1.5))), 2)}
+
+
 def to_style(prof: dict, base: dict | None = None) -> dict:
     s = dict(style_mod.clean_style(base))
     e, d, snd, dl = prof.get("edit", {}), prof.get("design") or {}, prof.get("sound") or {}, prof.get("delivery") or {}
@@ -512,6 +541,7 @@ def to_style(prof: dict, base: dict | None = None) -> dict:
         s.update(zoom_every=3, zoom_amount=1.06, sfx_density=0.1)
     if (d.get("zoomed_ratio") or 0) > 0.5:
         s["zoom_amount"] = max(s["zoom_amount"], 1.18)
+    s.update(zoom_fields(prof))
     if (e.get("flashes") or 0) >= 2:
         s["transition_style"] = "dinamico"
     elif (e.get("dips_to_black") or 0) >= 2:
@@ -660,6 +690,14 @@ def combine(profiles: list[dict]) -> dict:
         out["elements"]["speaker_layout"] = _vote([e.get("speaker_layout") for e in els], "none")
         out["elements"]["background"] = _vote([e.get("background") for e in els], "other")
         out["elements"]["sampled"] = sum(int(e.get("sampled") or 0) for e in els)
+    zs = [p["zoom"] for p in profiles if (p.get("zoom") or {}).get("confidence", 0) >= 0.4]
+    if zs:
+        out["zoom"] = {"events": [], "confidence": round(min(z.get("confidence", 0) for z in zs), 2),
+                       "zoom_per_min": _num([z.get("zoom_per_min") for z in zs]),
+                       "punch_per_min": _num([z.get("punch_per_min") for z in zs]),
+                       "amount": _num([z.get("amount") for z in zs if z.get("amount")]),
+                       "hold_s": _num([z.get("hold_s") for z in zs if z.get("hold_s")]),
+                       "kind": _vote([z.get("kind") for z in zs], "punch")}
     dels = [p["delivery"] for p in profiles if p.get("delivery")]
     if dels:
         out["delivery"] = {k: _num([d.get(k) for d in dels]) for k in ("words", "words_per_min", "median_pause_s", "long_pauses")}
@@ -731,7 +769,7 @@ def _resolve(src: dict, progress) -> tuple[Path, dict]:
             raise RuntimeError("Video no encontrado.")
         return Path(v["stored_path"]), {"kind": "library", "video_id": src["video_id"], "title": v["title"]}
     up = config.STUDIO_MEDIA_DIR / str(src.get("upload_id"))
-    return up, {"kind": "upload", "title": src.get("source_name") or "Video subido"}
+    return up, {"kind": "upload", "upload_id": src.get("upload_id"), "title": src.get("source_name") or "Video subido"}
 
 
 def _sources(prm: dict) -> list[dict]:
@@ -826,6 +864,71 @@ def run_learn(job: dict, progress) -> dict:
     return {"style_id": sid, "videos": len(allv), "new": len(videos), "failed": failed,
             "cuts_per_10s": agg["edit"].get("cuts_per_10s"),
             "sound_pro": bool(agg.get("sound_pro"))}
+
+
+def _source_path(info: dict, progress) -> Path | None:
+    """Vuelve a encontrar el archivo de un video ya aprendido (biblioteca, subida o enlace)."""
+    if info.get("kind") == "library" and info.get("video_id"):
+        path, _ = _resolve({"video_id": info["video_id"]}, progress)
+        return path if path.exists() else None
+    if info.get("kind") == "upload" and info.get("upload_id"):
+        path = config.STUDIO_MEDIA_DIR / str(info["upload_id"])
+        return path if path.exists() else None
+    if info.get("kind") == "url" and info.get("url"):
+        path, _ = _resolve({"url": info["url"]}, progress)
+        return path if path.exists() else None
+    return None
+
+
+def run_measure_zooms(job: dict, progress) -> dict:
+    """Mide los zooms reales de los videos de un estilo ya aprendido sin repetir todo el análisis.
+    Actualiza solo los ajustes de zoom del estilo (el resto, incluido lo que ajustaste, se conserva)."""
+    from . import zoom_detect
+    ensure_schema()
+    sid = job["params"]["style_id"]
+    with db.get_conn() as conn:
+        r = conn.execute("SELECT profile, style FROM learned_styles WHERE id = ?", (sid,)).fetchone()
+    if not r:
+        raise RuntimeError("El estilo ya no existe.")
+    agg = json.loads(r["profile"])
+    videos = agg.get("videos") or [{"source": {"title": "video original"}, "profile": agg}]
+    done, missing = 0, []
+    n = len(videos)
+    for i, v in enumerate(videos):
+        title = v.get("source", {}).get("title") or f"video {i + 1}"
+        progress(i / n * 0.9, f"Video {i + 1}/{n}: buscando el archivo")
+        try:
+            path = _source_path(v.get("source") or {}, lambda p, m: None)
+        except Exception:  # noqa: BLE001
+            path = None
+        if not path:
+            missing.append(title)
+            continue
+        prof = v["profile"]
+        win = float(prof.get("analyzed_seconds") or min(float(prof.get("duration") or 180), 180.0))
+        scenes = [float(e["t"]) for e in prof.get("cut_events") or []]
+        progress(i / n * 0.9 + 0.05, f"Video {i + 1}/{n}: detectando zooms")
+        prof["zoom"] = zoom_detect.detect(path, 0, win, scene_cuts=scenes)
+        done += 1
+    if not done:
+        raise RuntimeError("No encontré los videos de este estilo en tu PC. Vuelve a aprenderlo con los videos: "
+                           + ", ".join(missing[:5]))
+    if agg.get("videos"):
+        merged = combine([x["profile"] for x in videos])
+        agg["zoom"] = merged.get("zoom") or videos[0]["profile"].get("zoom")
+    style = style_mod.clean_style({**json.loads(r["style"] or "{}"), **zoom_fields(agg)})
+    agg["edl"] = [e for e in agg.get("edl") or [] if e.get("type") != "zoom"]
+    for idx, v in enumerate(videos):
+        for ev in build_edl(v["profile"]):
+            if ev["type"] == "zoom":
+                agg["edl"].append({**ev, "src": idx, "source": v["source"].get("title", f"video {idx + 1}")})
+    agg["edl"].sort(key=lambda ev: (ev["t"], ev["type"]))
+    with db.get_conn() as conn:
+        conn.execute("UPDATE learned_styles SET profile = ?, style = ? WHERE id = ?",
+                     (json.dumps(agg, ensure_ascii=False), json.dumps(style), sid))
+    z = agg.get("zoom") or {}
+    return {"style_id": sid, "measured": done, "missing": missing, "zoom_per_min": z.get("zoom_per_min"),
+            "amount": z.get("amount"), "hold_s": z.get("hold_s"), "kind": style.get("zoom_kind")}
 
 
 def list_styles() -> list[dict]:

@@ -86,6 +86,7 @@ export function TopicCreator({ status, notify, onCreated }) {
           <Icon name="spark" /> Crear video
         </button>
         {job && job.status !== 'done' && <JobProgress job={job} />}
+        {zjob && zjob.status !== 'done' && zjob.status !== 'error' && <JobProgress job={zjob} />}
       </div>
       <div className="panel">
         <div className="panel-head"><h2>Clips a usar</h2><span className="muted small">{selected.size ? `${selected.size} elegidos` : 'Todos los indexados'}</span></div>
@@ -358,6 +359,19 @@ export function StylesPanel({ notify }) {
     if (r.ok) { notify(`Estilo "${s.name}" eliminado`); if (target === String(s.id)) setTarget(''); if (open === s.id) setOpen(null) } else notify('No se pudo eliminar el estilo', 'error')
     load()
   }
+  const [zoomJob, setZoomJob] = useState(null)
+  const zjob = useJob(zoomJob, (j) => {
+    if (j.status === 'done') {
+      const r = j.result
+      notify(r.kind === 'none' ? 'Medido: tu referencia no usa zooms; las ediciones tampoco los pondrán'
+        : `Zooms medidos: ${r.zoom_per_min}/min · ${Math.round(((r.amount || 1) - 1) * 100)} % · ${r.hold_s} s${r.missing?.length ? ` · faltan ${r.missing.length} video(s)` : ''}`)
+    } else if (j.status === 'error') notify(j.error, 'error')
+    load()
+  })
+  const measureZooms = async (s) => {
+    try { setZoomJob((await post(`/styles/${s.id}/zooms`, {})).id) } catch (e) { notify(e.message, 'error') }
+  }
+  const zoomRunning = zjob && ['queued', 'running'].includes(zjob.status)
   const running = job && ['queued', 'running'].includes(job.status)
   const toggle = (id) => setPicked((x) => (x.includes(id) ? x.filter((y) => y !== id) : [...x, id]))
 
@@ -419,6 +433,7 @@ export function StylesPanel({ notify }) {
                 <div>
                   <b>{s.name}</b>
                   <div className="muted small">{s.profile.n_videos > 1 ? `${s.profile.n_videos} videos · ` : ''}{s.profile.edit?.cuts_per_10s ?? '—'} cortes/10 s · {s.profile.delivery?.words_per_min ?? '—'} palabras/min · música: {s.profile.sound?.music_bed ?? '—'}</div>
+                  {s.profile.zoom && <div className="muted small">🔍 {s.style.zoom_kind === 'none' ? 'sin zooms' : `${s.profile.zoom.zoom_per_min} zooms/min · ${Math.round(((s.profile.zoom.amount || 1) - 1) * 100)} % · se sostienen ${s.profile.zoom.hold_s ?? '—'} s · ${s.profile.zoom.kind === 'ramp' ? 'progresivos' : 'de golpe'}`}</div>}
                   {sp && <div className="muted small">🔊 {sp.sfx_per_min} efectos/min{sp.roles?.length ? ` · ${sp.roles.join(', ')}` : ''}{sp.cut_sync != null ? ` · ${Math.round(sp.cut_sync * 100)} % de cortes con sonido` : ''}{sp.music_ratio != null ? ` · música ${Math.round(sp.music_ratio * 100)} %` : ''}</div>}
                 </div>
                 <button className="icon-btn sm style-del" title="Eliminar estilo" onClick={(e) => { e.stopPropagation(); del(s) }}><Icon name="trash" size={14} /></button>
@@ -441,6 +456,8 @@ export function StylesPanel({ notify }) {
                   <div className="row mt">
                     <button className="btn" onClick={async () => { await post(`/styles/${s.id}/default`); notify('Será tu estilo para proyectos nuevos') }}>Usar por defecto</button>
                     <button className="btn" onClick={() => { setTarget(String(s.id)); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>+ Sumar más videos</button>
+                    <button className="btn" disabled={zoomRunning} title="Detecta los zooms reales de cámara de estos videos (cuántos, cuánto acercan y cuánto duran)"
+                      onClick={() => measureZooms(s)}>{zoomRunning ? 'Midiendo zooms…' : s.profile.zoom ? '🔍 Volver a medir zooms' : '🔍 Medir zooms'}</button>
                     <button className="btn" onClick={() => del(s)}><Icon name="trash" size={14} /> Eliminar estilo</button>
                   </div>
                 </div>

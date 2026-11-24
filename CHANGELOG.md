@@ -2,6 +2,18 @@
 
 Todos los cambios notables del proyecto se documentan en este archivo.
 
+## [v0.8.0] - Zooms reales de tu referencia y edición más profesional (2026-11-23)
+
+- `studio/zoom_detect.py`: mide los zooms reales de cámara de la referencia, cuadro a cuadro (ORB + escala afín con RANSAC, sin cruzar cortes de escena). Distingue zooms de golpe (punch) y progresivos (ramp), con intensidad, duración y zooms por minuto. Un paneo no cuenta como zoom.
+- `learn.py`: el aprendizaje guarda la medición (`profile.zoom`). El estilo recibe `zoom_per_min`, `zoom_amount`, `zoom_hold_s` y `zoom_kind`, y el desarme (EDL) usa los zooms medidos en vez de la pista de la IA de visión. Botón «🔍 Medir zooms» en Mis estilos para estilos ya aprendidos, sin repetir todo el análisis.
+- Sin zoom alterno mecánico cuando el estilo trae zooms medidos. `reference_rules.place_zooms` los pone en los momentos de énfasis de tu video (exclamación o pregunta, palabra fuerte, pico de voz), con la intensidad y duración de tu referencia, sostenidos hasta el fin de la frase, sin seguirse y respetando la tasa por minuto. Si tu referencia no usa zooms, no se pone ninguno (ni el empuje lento).
+- `brief.py`: los límites de videos largos ya no recortan los zooms medidos.
+- Director y agente: criterio tipo OpusClip en el prompt (gancho en 3 s, evento en la palabra clave, menos es más). En código: mínimo 3 s entre textos y 4 s entre sonidos; los sonidos de énfasis tienen prioridad.
+- Rostro: el seguimiento también mide la altura de la cara y los zooms se centran en ella. Las tarjetas eligen el lado contrario a la cara en cada momento, no según una posición fija.
+- `studio/precheck.py`: revisión antes de renderizar. Avisa de inicio en negro, silencio inicial de más de 0.5 s, textos que se pisan y duración lejos de la pedida. Arregla en la copia que se renderiza los textos vacíos, ilegibles o que se salen, y los recursos que pasan del final. Se muestra en el reporte de calidad.
+- Aviso claro cuando Ollama o llama.cpp no responde, o falta el modelo: la edición se hace sin IA y lo dice.
+- Pruebas: `test_zoom_detect.py` (7), `test_precheck.py` (2). Suite: 175 pasan.
+
 ## [v0.7.3] - Biblioteca en tiempo real, DaVinci Resolve y máxima calidad (2026-11-23)
 
 - `library_sync.py`: la Biblioteca, Stream y Clips reflejan las carpetas autorizadas (con subcarpetas). Los videos nuevos se agregan solos, esperando a que el archivo deje de grabarse, y los borrados o movidos ya no se muestran (sus clips y proyectos se conservan). Se refresca cada 5 s y al volver a la ventana.
@@ -238,3 +250,7 @@ Todas las 133 pruebas de backend pasan (`pytest -q`).
 ## [v0.4] — Lanzamiento inicial documentado
 
 Véase `README.md` y `docs/ESTADO_ACTUAL.md` para el estado de v0.4.
+
+## [plan] - Mejora de edición IA tipo OpusClip (2026-11-23)
+
+- `docs/PLAN_MEJORA_EDICION_IA.md`: plan integral de mejora de la edición con modelos IA (detección real de zoom, prompts del director, b-roll semántico, rostro X+Y, subtítulos dinámicos, QA preventivo, modelos). Implementado en v0.8.0, salvo el cambio de hablante activo y los emojis en subtítulos (pendientes).

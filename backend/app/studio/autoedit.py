@@ -45,6 +45,11 @@ def keep_words(words: list[dict], remove_fillers: bool = True) -> list[dict]:
     return out
 
 
+def measured_zoom(st: dict) -> bool:
+    """El estilo trae zooms medidos de una referencia: van en los momentos de énfasis, no alternados por toma."""
+    return st.get("zoom_kind") in ("punch", "ramp", "none")
+
+
 def build_segments(words: list[dict], duration: float, silence: float,
                    pad_in: float = 0.06, pad_out: float = 0.14, max_len: float = 7.0) -> list[tuple[float, float]]:
     if not words:
@@ -94,7 +99,7 @@ def build_timeline(p: dict, words: list[dict], energy: list[float], face_x: floa
     zoom_amt, every = st["zoom_amount"], max(1, int(st["zoom_every"]))
     for i, (a, b) in enumerate(segs):
         zoom = 1.0
-        if is_video and zoom_amt > 1.0:
+        if is_video and zoom_amt > 1.0 and not measured_zoom(st):
             zoom = zoom_amt if (i // every) % 2 == 1 else 1.0
             text = " ".join(w["word"] for w in kept if a <= w["start"] < b)
             if "!" in text or "?" in text:
@@ -102,9 +107,12 @@ def build_timeline(p: dict, words: list[dict], energy: list[float], face_x: floa
         seg = {"id": tlm.nid("v"), "src_in": a, "src_out": b, "start": 0,
                "zoom": zoom, "crop_x": face_x if face_x is not None else 0.5}
         if track:
-            pts = [[t, x] for t, x in track if a - 0.5 <= t <= b + 0.5]
+            pts = [[p_[0], p_[1]] for p_ in track if a - 0.5 <= p_[0] <= b + 0.5]
             if len(pts) >= 2:
                 seg["track"] = pts
+            fy = [p_[2] for p_ in track if len(p_) > 2 and a - 0.5 <= p_[0] <= b + 0.5]
+            if fy:  # altura de la cara: los zooms se centran en ella y no le cortan la cabeza
+                seg["face_y"] = round(sorted(fy)[len(fy) // 2], 3)
         tl["tracks"]["video"].append(seg)
     tlm.relayout(tl, words, dur)
 
@@ -194,8 +202,8 @@ def run_autoedit(job: dict, progress) -> dict:
         face_x, track = None, None
         if p["source_kind"] == "video":
             progress(0.58, "Siguiendo tu rostro para encuadrar")
-            track = crop.face_track(src, 0, meta["duration"], step=0.25)
-            face_x = sorted(x for _, x in track)[len(track) // 2] if track else None
+            track = crop.face_track(src, 0, meta["duration"], step=0.25, with_y=True)
+            face_x = sorted(p_[1] for p_ in track)[len(track) // 2] if track else None
 
         # El brief decide el ritmo: un video largo informativo no se edita como un TikTok
         b = brief_mod.infer(p)
@@ -236,6 +244,13 @@ def run_autoedit(job: dict, progress) -> dict:
                    "instructions_plan": {"resumen": (iplan or {}).get("resumen"), "aplicado": inst_notes,
                                          "puntuales": (iplan or {}).get("puntuales")} if iplan else None}
         if params.get("use_ai", True):
+            try:
+                warn = agent.llm_warning()
+            except Exception:  # noqa: BLE001
+                warn = None
+            if warn:
+                ai_info["warning"] = warn
+                progress(0.68, warn[:120])
             progress(0.68, "La IA está añadiendo títulos, textos y recursos")
             bgvid = ((tl.get("chroma") or {}).get("bg") or {}).get("video_id") if (tl.get("chroma") or {}).get("enabled") else None
             b_for_ai = {**b, "attachments": [a for a in b["attachments"] if a["video_id"] != bgvid]}
@@ -260,6 +275,12 @@ def run_autoedit(job: dict, progress) -> dict:
                     ai_info["beats"] = director.apply_beats(tl)
                 except Exception as exc:  # noqa: BLE001
                     ai_info["beats"] = {"error": str(exc)[:160]}
+            if not flags["no_zoom"]:  # zooms medidos en tu referencia, en tus momentos de énfasis
+                try:
+                    zst = {**p["style"], **({"zoom_per_min": targets["zoom_per_min"]} if isinstance((targets or {}).get("zoom_per_min"), (int, float)) else {})}
+                    ai_info["reference_zooms"] = reference_rules.place_zooms(tl, zst, director.timeline_curve(tl, energy))
+                except Exception as exc:  # noqa: BLE001
+                    ai_info["reference_zooms"] = {"error": str(exc)[:160]}
             caps_t = {**(targets or {}), **({"zoom_per_min": 0.0} if flags["no_zoom"] else {})}
             if caps_t:  # topes de la referencia sobre el director: se queda con los más fuertes, repartidos
                 ai_info["reference_caps"] = reference_rules.after_director(tl, caps_t)

@@ -49,10 +49,12 @@ def _detector():
     return haar
 
 
-def face_track(video: Path, start: float, end: float, step: float = 0.25) -> list[tuple[float, float]] | None:
+def face_track(video: Path, start: float, end: float, step: float = 0.25,
+               with_y: bool = False) -> list[tuple] | None:
     """Posición horizontal (0-1) del rostro principal a lo largo del tiempo, suavizada.
 
     Devuelve [(t_absoluto, x)] cada ~0.5 s, o None si casi no hay rostros.
+    Con with_y=True devuelve [(t, x, y)]: y = altura (0-1) del centro del rostro, para centrar los zooms en la cara.
     """
     try:
         import cv2
@@ -67,6 +69,7 @@ def face_track(video: Path, start: float, end: float, step: float = 0.25) -> lis
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     every = max(1, int(round(fps * step)))
     raw: list[tuple[float, float | None]] = []
+    ys: dict[int, float] = {}
     try:
         cap.set(cv2.CAP_PROP_POS_MSEC, start * 1000)
         idx, t, prev_x = 0, start, None
@@ -89,6 +92,7 @@ def face_track(video: Path, start: float, end: float, step: float = 0.25) -> lis
                         return f[2] * f[3] / (small.shape[0] * small.shape[1]) - near * 0.03
                     f = max(faces, key=rank)
                     x = float((f[0] + f[2] / 2) / small.shape[1])  # YuNet da float32 de numpy: no se guarda en JSON
+                    ys[len(raw)] = float((f[1] + f[3] / 2) / small.shape[0])
                     prev_x = x
                 raw.append((t, x))
             else:
@@ -113,10 +117,18 @@ def face_track(video: Path, start: float, end: float, step: float = 0.25) -> lis
         if abs(target - cur) > 0.012:
             cur = target
         out.append((t, cur))
+    yv, last_y = [], (statistics.median(ys.values()) if ys else 0.4)
+    for i in range(len(raw)):
+        last_y = ys.get(i, last_y)
+        yv.append(last_y)
     keep, last_t = [], -1.0
-    for t, x in out:
+    for i, (t, x) in enumerate(out):
         if t - last_t >= 0.5:
-            keep.append((round(t, 2), round(x, 4)))
+            if with_y:
+                y = statistics.median(yv[max(0, i - 2):i + 3])
+                keep.append((round(t, 2), round(x, 4), round(y, 4)))
+            else:
+                keep.append((round(t, 2), round(x, 4)))
             last_t = t
     return keep
 

@@ -83,6 +83,19 @@ def place_background(tl: dict, items: list[dict], per_min: float, text_share: fl
     return len(sched)
 
 
+def face_x_at(tl: dict, t: float) -> float | None:
+    """Dónde está tu cara (0-1 en horizontal) en el segundo t del timeline, según el seguimiento del rostro."""
+    for s in tl["tracks"]["video"]:
+        st0 = float(s["start"])
+        if st0 <= t < st0 + float(s["src_out"]) - float(s["src_in"]):
+            src_t = float(s["src_in"]) + t - st0
+            pts = s.get("track") or []
+            if pts:
+                return float(min(pts, key=lambda p: abs(float(p[0]) - src_t))[1])
+            return float(s["crop_x"]) if isinstance(s.get("crop_x"), (int, float)) else None
+    return None
+
+
 def place_cards(tl: dict, items: list[dict], per_min: float, face_side: str = "center", zone: str = "sides",
                 plan: dict | None = None) -> int:
     """Tarjetas animadas sin tapar tu cara.
@@ -108,7 +121,9 @@ def place_cards(tl: dict, items: list[dict], per_min: float, face_side: str = "c
         r = it["resource"]
         lab = (it["need"].get("label") or "")[:32]
         if zone == "sides":
-            side = "right" if face_side == "left" else "left" if face_side == "right" else ("right" if i % 2 else "left")
+            fx_now = face_x_at(tl, (t0 + t1) / 2)  # la cara puede moverse: se mira dónde está en ese momento
+            fs = face_side if fx_now is None else ("left" if fx_now < 0.42 else "right" if fx_now > 0.58 else "center")
+            side = "right" if fs == "left" else "left" if fs == "right" else ("right" if i % 2 else "left")
             pos, scale = {"x": 0.72 if side == "right" else 0.28, "y": 0.42}, 0.4
             rot = (-4 if side == "right" else 4) if i % 3 else 0
             anim = "pop" if i % 2 else ("slide_right" if side == "right" else "slide_left")
@@ -172,9 +187,23 @@ def add_change_sfx(tl: dict, per_min: float) -> int:
     return n
 
 
-def apply_zoom(tl: dict, zoom_per_min: float) -> None:
-    """Zooms suaves en tomas alternas según la meta (golpes de zoom = fx punch)."""
+def apply_zoom(tl: dict, zoom_per_min: float, targets: dict | None = None) -> None:
+    """Zooms según la meta. Con zooms medidos en la referencia: en momentos de énfasis con su intensidad y
+    duración; si no, golpes suaves espaciados (fx punch)."""
     if zoom_per_min <= 0:
+        return
+    t = targets or {}
+    if isinstance(t.get("zoom_amount"), (int, float)):
+        from . import reference_rules
+        for s in tl["tracks"]["video"]:
+            s["fx"] = [f for f in s.get("fx") or [] if not f.get("gen")]
+        old_ids = {id(f) for s in tl["tracks"]["video"] for f in s.get("fx") or []}
+        reference_rules.place_zooms(tl, {"zoom_kind": "punch", "zoom_per_min": zoom_per_min,
+                                         "zoom_amount": t["zoom_amount"], "zoom_hold_s": t.get("zoom_hold_s") or 1.5})
+        for s in tl["tracks"]["video"]:
+            for f in s.get("fx") or []:
+                if id(f) not in old_ids:
+                    f["gen"] = True
         return
     gap = max(6.0, 60.0 / zoom_per_min)
     last = -1e9
@@ -243,7 +272,7 @@ def run(tl: dict, ctx: dict, progress=lambda p, s: None) -> dict:
         if use_labels:
             add_labels(tl, pool, prm["labels_per_min"])
         if use_zoom and prm["zoom_per_min"] > 0:
-            apply_zoom(tl, prm["zoom_per_min"])
+            apply_zoom(tl, prm["zoom_per_min"], targets)
         add_change_sfx(tl, sfx_rate)
         return n
 

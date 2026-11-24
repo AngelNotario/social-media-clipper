@@ -27,6 +27,9 @@ def before(st: dict, pace: dict, b: dict, targets: dict | None) -> list[str]:
         if float(st.get("zoom_amount") or 1.0) > 1.0:
             notes.append("sin zoom alterno entre tomas (tu referencia no usa zooms)")
         st["zoom_amount"] = 1.0
+    elif zoom is not None and st.get("zoom_kind") in ("punch", "ramp"):
+        st["zoom_per_min"] = zoom  # se colocan en momentos de énfasis (place_zooms), no alternados
+        notes.append(f"zooms en los momentos de énfasis ({zoom:g}/min, como tu referencia)")
     elif zoom is not None:
         # zoom alterno más espaciado si la referencia hace pocos zooms por minuto
         st["zoom_every"] = 1 if zoom >= 6 else 2 if zoom >= 3 else 3
@@ -108,6 +111,87 @@ def after_director(tl: dict, targets: dict | None) -> dict:
             tl["tracks"]["text"] = [t for t in texts if t.get("kind") != "meme" or id(t) in keep]
             removed["memes"] = n
     return removed
+
+
+EMPH_PUNCT = ("!", "?", "¡", "¿")
+
+
+def _emphasis(tl: dict, curve: list | None) -> list[tuple[float, float, float]]:
+    """Momentos de énfasis del propio video: (t, fuerza, fin de la frase). Palabra con exclamación/pregunta,
+    palabra larga al cierre de frase o pico de energía de la voz."""
+    words = tl.get("words") or []
+    if not words:
+        return []
+    energy = {}
+    if curve:
+        for t, e in curve:
+            energy[round(float(t) * 10)] = float(e)
+    def en(t):
+        return max([energy.get(round(t * 10) + d, 0.0) for d in (-1, 0, 1, 2)] or [0.0])
+    hi = sorted(energy.values())[int(len(energy) * 0.8)] if len(energy) >= 5 else 1.0
+    out = []
+    for i, w in enumerate(words):
+        txt = str(w.get("word") or "")
+        # fin de la frase: siguiente palabra con punto o pausa ≥ 0.35 s
+        end = float(w["end"])
+        for j in range(i, min(i + 12, len(words))):
+            end = float(words[j]["end"])
+            nxt = words[j + 1] if j + 1 < len(words) else None
+            if txt and (str(words[j]["word"]).rstrip().endswith((".", "!", "?", "…")) or
+                        nxt is None or float(nxt["start"]) - end >= 0.35):
+                break
+        score = en(float(w["start"]))
+        if any(c in txt for c in EMPH_PUNCT):
+            score += 0.6
+        if len(txt.strip(".,!?¡¿…")) >= 7:
+            score += 0.15
+        if score >= hi or any(c in txt for c in EMPH_PUNCT):
+            out.append((float(w["start"]), score, end))
+    return out
+
+
+def place_zooms(tl: dict, st: dict, curve: list | None = None) -> int:
+    """Zooms medidos en tu referencia (ritmo, intensidad y duración) puestos en los momentos de énfasis de
+    TU video: entra en la palabra fuerte y se sostiene hasta el final de la frase. Devuelve cuántos puso."""
+    if st.get("zoom_kind") not in ("punch", "ramp"):
+        return 0
+    rate = float(st.get("zoom_per_min") or 0)
+    dur = float(tl.get("duration") or 0)
+    if rate <= 0 or dur <= 0:
+        return 0
+    amount = max(0.02, min(0.5, float(st.get("zoom_amount") or 1.12) - 1.0))
+    hold_ref = max(0.4, float(st.get("zoom_hold_s") or 1.5))
+    segs = [s for s in tl["tracks"]["video"] if not s.get("rect")]
+    existing = [float(s["start"]) + float(f.get("t", 0)) for s in tl["tracks"]["video"]
+                for f in (s.get("fx") or []) if f.get("type") in ("punch", "zoom")]
+    want = int(round(rate * dur / 60)) - len(existing)
+    if want <= 0:
+        return 0
+    gap = max(2.5, 0.5 * 60.0 / rate)
+    cands = sorted(_emphasis(tl, curve), key=lambda x: -x[1])
+    taken = list(existing)
+    n = 0
+    for t, _, end in cands:
+        if n >= want:
+            break
+        if any(abs(t - x) < gap for x in taken):
+            continue
+        seg = next((s for s in segs if float(s["start"]) <= t < float(s["start"]) + float(s["src_out"]) - float(s["src_in"])), None)
+        if not seg:
+            continue
+        local = t - float(seg["start"])
+        room = float(seg["src_out"]) - float(seg["src_in"]) - local - 0.3
+        hold = max(0.4, min(end - t, hold_ref * 1.5, room))
+        if room < 0.6:
+            continue
+        fx = {"t": round(max(0.0, local - 0.05), 3), "type": "punch", "amount": round(amount, 3),
+              "hold": round(hold, 2), "ref": True, "hold_fixed": True}
+        if st.get("zoom_kind") == "ramp":
+            fx["rise"] = round(min(1.2, max(0.4, hold * 0.5)), 2)
+        seg.setdefault("fx", []).append(fx)
+        taken.append(t)
+        n += 1
+    return n
 
 
 def card_plan(targets: dict | None, zone: str) -> dict:

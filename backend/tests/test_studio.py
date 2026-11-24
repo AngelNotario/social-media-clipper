@@ -286,3 +286,30 @@ def test_style_validation(client):
     s = clean_style({"caption_color": "rojo", "zoom_amount": 9, "caption_position": "izquierda", "remove_fillers": 0})
     assert s["caption_color"] == "#FFFFFF" and s["zoom_amount"] == 1.5
     assert s["caption_position"] == "auto" and s["remove_fillers"] is False
+
+
+@needs_ffmpeg
+def test_render_with_color_emojis(client, fakes, media_files):
+    from app.studio import emoji, projects as pj, render
+    if not emoji.font_path():
+        pytest.skip("sin fuente de emojis a color")
+    up = _upload(client, media_files["video"])
+    res = client.post("/api/studio/projects", json={"name": "Emojis", "source_type": "upload", "upload_id": up,
+                                                    "use_ai": False}).json()
+    pid = res["project"]["id"]
+    st = client.get(f"/api/studio/projects/{pid}").json()["style"]
+    client.put(f"/api/studio/projects/{pid}/style", json={"style": {**st, "caption_emojis": True, "caption_style": "karaoke"}})
+    p = pj.get(pid)
+    p["timeline"]["captions"]["enabled"] = True
+    work = Path(p["source_path"]).parent / "emoji_test"
+    work.mkdir(exist_ok=True)
+    cmd, _, _ = render.build_command(p, "preview", work, work / "o.mp4")
+    assert any(str(c).startswith("emoji") and str(c).endswith(".png") for c in cmd)
+    assert (work / "emoji0.png").exists()
+    pj.save(pid, p["timeline"])
+    j = client.post(f"/api/studio/projects/{pid}/render", json={"quality": "preview"}).json()
+    assert client.get(f"/api/jobs/{j['id']}").json()["status"] == "done"
+    import os, shutil
+    if os.environ.get("KEEP_EMOJI_RENDER"):
+        shutil.copy(client.get(f"/api/studio/projects/{pid}/renders").json()[0]["path"], os.environ["KEEP_EMOJI_RENDER"])
+    client.delete(f"/api/studio/projects/{pid}")

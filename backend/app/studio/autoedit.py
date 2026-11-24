@@ -241,6 +241,7 @@ def run_autoedit(job: dict, progress) -> dict:
         removed = round(meta["duration"] - tl["duration"], 1)
 
         ai_info = {"used": False, "reference_rules": rules_notes, "condense": condensed,
+                   "reference_warnings": [w["msg"] for w in (targets or {}).get("reference_warnings") or []],
                    "instructions_plan": {"resumen": (iplan or {}).get("resumen"), "aplicado": inst_notes,
                                          "puntuales": (iplan or {}).get("puntuales")} if iplan else None}
         if params.get("use_ai", True):
@@ -355,6 +356,13 @@ def run_autoedit(job: dict, progress) -> dict:
                 ai_info["edl_loop"] = edl_info
             except Exception as exc:  # noqa: BLE001
                 ai_info["edl_loop"] = {"error": str(exc)[:200]}
+        try:  # sin silencio ni negro al arranque: el gancho empieza en el primer cuadro
+            from . import precheck
+            cut0 = precheck.trim_start(tl, {**p, "timeline": tl})
+            if cut0:
+                ai_info["trim_start"] = cut0
+        except Exception as exc:  # noqa: BLE001
+            ai_info["trim_start"] = {"error": str(exc)[:160]}
         tlm.relayout(tl, words, meta["duration"])
         p = projects.save(pid, tl, note="Auto-edición")
         return {"segments": len(tl["tracks"]["video"]), "duration": tl["duration"],
@@ -397,69 +405,75 @@ def _first_asset(assets_mod, want: str) -> int | None:
     return None
 
 
-def _apply_corrections(tl: dict, corrections: list[dict], p: dict, st: dict, assets_mod) -> int:
+def _apply_corrections(tl: dict, corrections: list[dict], p: dict, st: dict, assets_mod=None) -> int:
+    """Completa el RITMO de la referencia en los momentos de énfasis de TU video (no en los segundos de la
+    referencia). Solo agrega lo que no inventa contenido: golpes de zoom, textos con las palabras que dices
+    en ese momento y efectos de sonido de tu catálogo. Los recursos visuales los pone el módulo de recursos."""
+    from . import reference_rules
+    from .director import ROLE_VOLUME, sound_for
     applied = 0
     dur = float(tl.get("duration") or 0)
+    cands = sorted(reference_rules._emphasis(tl, None), key=lambda x: -x[1])
+    words = tl.get("words") or []
+
+    def taken(kind: str) -> list[float]:
+        if kind == "caption":
+            return [float(t["start"]) for t in tl["tracks"]["text"]]
+        if kind == "sfx":
+            return [float(x["start"]) for x in tl["tracks"]["sfx"]]
+        return [float(sg["start"]) + float(f.get("t", 0)) for sg in tl["tracks"]["video"]
+                for f in sg.get("fx") or [] if f.get("type") in ("punch", "zoom")]
+
     for c in corrections:
-        op = c.get("op", "")
-        t = max(0.0, min(float(c.get("t", 0)), max(dur, 0.001)))
-        try:
-            if op == "add_cut":
-                if tlm.split_at(tl, t):
-                    applied += 1
-            elif op == "add_zoom":
-                seg = _segment_at(tl, t)
-                if seg:
-                    amt = float((c.get("detail") or {}).get("amount") or st.get("zoom_amount") or 1.15)
-                    seg["zoom"] = round(max(float(seg.get("zoom", 1.0)), amt), 3)
-                    applied += 1
-            elif op == "add_transition":
-                seg = _segment_after(tl, t)
-                if seg:
-                    seg["transition"] = (c.get("detail") or {}).get("kind") or "zoom"
-                    applied += 1
-            elif op == "add_caption":
-                end = min(float(c.get("end", t + 2.0)), dur)
-                if end - t >= 0.25:
-                    text = str((c.get("detail") or {}).get("text") or "...")
-                    tl["tracks"]["text"].append({"id": tlm.nid("t"), "start": t, "end": round(end, 3),
-                                                 "text": text[:120], "kind": "callout"})
-                    applied += 1
-            elif op.startswith("add_overlay_"):
-                parts = op.split("_")
-                mode = parts[2] if len(parts) >= 3 else "card"
-                end = min(float(c.get("end", t + 2.5)), dur)
-                if end - t >= 0.5:
-                    aid = _first_asset(assets_mod, "broll")
-                    tl["tracks"]["broll"].append({"id": tlm.nid("b"), "asset_id": aid,
-                                                  "start": t, "end": round(end, 3), "mode": mode,
-                                                  "label": (c.get("detail") or {}).get("label") or "",
-                                                  "gen": aid is None})
-                    applied += 1
-            elif op == "add_sfx":
-                aid = _first_asset(assets_mod, "sfx")
-                if aid is not None:
-                    tl["tracks"]["sfx"].append({"id": tlm.nid("s"), "asset_id": aid, "start": t, "volume": 0.5})
-                    applied += 1
-            elif op == "add_music":
-                if not tl["tracks"]["music"]:
-                    aid = _first_asset(assets_mod, "music")
-                    if aid is not None:
-                        tl["tracks"]["music"].append({"id": tlm.nid("m"), "asset_id": aid,
-                                                      "start": 0.0, "end": round(dur, 3), "volume": 0.1})
-                        applied += 1
-        except Exception:  # noqa: BLE001
+        typ, need, gap = c.get("type", ""), int(c.get("count") or 0), float(c.get("min_gap") or 2.5)
+        kind = "caption" if typ == "caption" else "sfx" if typ == "sfx" else "zoom" if typ in ("zoom", "fx/punch", "fx/zoom") else None
+        if not kind or need <= 0:
             continue
+        busy = taken(kind)
+        snd = sound_for("impacto") if kind == "sfx" else None
+        if kind == "sfx" and not snd:
+            continue  # sin efectos en tu catálogo no se inventa ninguno
+        for t, _, end in cands:
+            if need <= 0:
+                break
+            if t < (2.8 if kind == "caption" else 0.3) or t > dur - 0.8 or any(abs(t - b) < gap for b in busy):
+                continue
+            if kind == "caption":
+                said = [w for w in words if t - 0.05 <= float(w["start"]) <= end + 0.05][:3]
+                text = " ".join(str(w["word"]).strip(" ,.;:") for w in said).strip()
+                if not text:
+                    continue
+                tl["tracks"]["text"].append({"id": tlm.nid("t"), "start": round(t, 3),
+                                             "end": round(min(dur, max(end + 0.3, t + 1.2)), 3),
+                                             "text": text.upper()[:40], "kind": "callout", "rhythm": True})
+            elif kind == "sfx":
+                tl["tracks"]["sfx"].append({"id": tlm.nid("s"), "asset_id": snd["id"], "start": round(max(0.0, t - 0.03), 3),
+                                            "volume": ROLE_VOLUME.get("impacto", 0.5), "rhythm": True})
+            else:
+                sg = _segment_at(tl, t)
+                if not sg or sg.get("rect"):
+                    continue
+                amt = (c.get("detail") or {}).get("amount")
+                amount = float(amt) - 1.0 if amt and float(amt) > 1.0 else max(0.04, float(st.get("zoom_amount") or 1.1) - 1.0)
+                local = t - float(sg["start"])
+                room = float(sg["src_out"]) - float(sg["src_in"]) - local - 0.3
+                if room < 0.6:
+                    continue
+                sg.setdefault("fx", []).append({"t": round(max(0.0, local - 0.05), 3), "type": "punch",
+                                                "amount": round(min(0.4, amount), 3),
+                                                "hold": round(max(0.4, min(end - t, room, 2.5)), 2), "rhythm": True})
+            busy.append(t)
+            need -= 1
+            applied += 1
     return applied
 
 
 def edit_to_style_loop(tl: dict, p: dict, st: dict, ref_edl: list[dict], targets: dict,
                        words: list[dict], dur: float, progress=lambda x, m: None,
                        max_rounds: int = 8, threshold: float = 90.0) -> tuple[dict, dict]:
-    """Bucle de agentes: reconstruye el timeline, lo compara con el desarme frame-accurate del
-    estilo de referencia, aplica correcciones y repite hasta que la edición coincida con el estilo
-    (o se agoten las rondas). No improvisa: copia cortes, sonidos, textos y recursos en el segundo
-    exacto donde están en la referencia."""
+    """Bucle de agentes: mide el ritmo del timeline contra el desarme de la referencia (eventos por minuto y
+    cadencia de cada tipo), completa lo que falta en los momentos de énfasis de tu video y repite hasta
+    parecerse al estilo (o agotar rondas). Copia el ritmo, no los segundos exactos de otro video."""
     from . import style_judge as sj
     best_tl, best_score, info = None, -1.0, {"rounds": 0, "score": 0.0, "by_type": {}}
     for rnd in range(max_rounds):

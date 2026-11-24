@@ -888,3 +888,14 @@ p.judge-note { display: block; }
 
 /* Brief: duración final */
 .seg.seg-wrap { flex-wrap: wrap; gap: 2px; }
+
+/* Pista de zooms detectados en un video de referencia */
+.zoom-track { position: relative; height: 18px; margin: 4px 0 6px; border-radius: 4px; background: var(--panel-2, rgba(127,127,127,.15)); }
+.zoom-mark { position: absolute; top: 2px; bottom: 2px; width: 4px; margin-left: -2px; border: 0; padding: 0; border-radius: 2px; cursor: pointer; }
+.zoom-mark.in { background: var(--accent, #7C5CFF); }
+.zoom-mark.out { background: rgba(127,127,127,.6); }
+.zoom-mark.ramp { margin-left: 0; opacity: .85; }
+.zoom-mark.off { background: transparent; outline: 1px dashed rgba(127,127,127,.8); }
+.zoom-mark:hover { transform: scaleY(1.25); }
+.tl-zoom { position: absolute; bottom: 2px; height: 5px; border-radius: 3px; background: #FFE500; opacity: .85; pointer-events: auto; z-index: 3; }
+.tl-zoom.ref { background: var(--accent, #7C5CFF); }

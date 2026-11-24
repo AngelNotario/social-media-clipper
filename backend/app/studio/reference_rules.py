@@ -48,6 +48,9 @@ def before(st: dict, pace: dict, b: dict, targets: dict | None) -> list[str]:
     if memes is not None and memes < 0.01 and st.get("memes", True):
         st["memes"] = False
         notes.append("sin textos meme (tu referencia no los usa)")
+    txt = _f(targets, "text_per_min")
+    if txt is not None:  # densidad de textos destacados como la de tu referencia
+        st["callouts_per_min"] = int(max(0, min(12, round(txt))))
     sfx = _f(targets, "sfx_per_min")
     if sfx is not None:
         st["sfx_per_min"] = sfx

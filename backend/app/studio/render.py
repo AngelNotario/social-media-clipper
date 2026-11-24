@@ -975,9 +975,30 @@ def build_command(p: dict, quality: str, work: Path, out: Path, force_single: bo
     ass = build_ass(tl, st)
     if "Dialogue:" in ass:
         (work / "studio.ass").write_text(ass, encoding="utf-8")
-        g.append(f"[{cur}]ass=studio.ass[vout]")
+        g.append(f"[{cur}]ass=studio.ass[vass]")
     else:
-        g.append(f"[{cur}]null[vout]")
+        g.append(f"[{cur}]null[vass]")
+    cur = "vass"
+    # Emojis a color encima del subtítulo (PNG con transparencia: libass en Windows no los dibuja a color)
+    if st.get("caption_emojis") and tl["captions"].get("enabled", True) and tl["words"] \
+            and st["caption_style"] in ("karaoke", "simple"):
+        from . import emoji as emoji_mod
+        kq = OW / tl["width"]
+        cap_px = int(st["caption_size"] * min(tl["width"], tl["height"]) / 1080)
+        mv = caption_margin(tl, st, cap_px)
+        size = _even(cap_px * 1.35 * kq)
+        y = max(0, int((tl["height"] - mv - cap_px * 1.3) * kq) - size - int(12 * kq))
+        for k, e in enumerate(emoji_mod.plan(group_words(tl["words"], int(st["caption_max_words"])))[:60]):
+            png = emoji_mod.render_png(e["emoji"], size, work / f"emoji{k}.png")
+            if not png:
+                continue
+            a, b = e["start"], max(e["end"], e["start"] + 0.6)
+            idx = add(["-loop", "1", "-t", f"{b + 0.5:.3f}", "-i", png.name])
+            g.append(f"[{idx}:v]format=rgba,fade=t=in:st={a:.3f}:d=0.12:alpha=1,"
+                     f"fade=t=out:st={max(a, b - 0.15):.3f}:d=0.15:alpha=1[em{k}]")
+            g.append(f"[{cur}][em{k}]overlay=x=(W-w)/2:y={y}:eof_action=pass:enable='between(t,{a:.3f},{b:.3f})'[emo{k}]")
+            cur = f"emo{k}"
+    g.append(f"[{cur}]null[vout]")
 
     # Música (con "ducking": baja cuando hablas)
     mus = []

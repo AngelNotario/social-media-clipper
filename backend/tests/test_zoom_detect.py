@@ -117,3 +117,24 @@ def test_measured_style_disables_alternation():
     from app.studio import autoedit
     assert autoedit.measured_zoom({"zoom_kind": "punch"})
     assert not autoedit.measured_zoom({"zoom_kind": ""})
+
+
+def test_toggle_false_positive_zoom(client):
+    import json
+    from app import db
+    learn.ensure_schema()
+    ev = [{"t0": 5.0, "t1": 5.0, "kind": "punch", "dir": "in", "amount": 1.15, "hold_s": 2.0},
+          {"t0": 20.0, "t1": 20.0, "kind": "punch", "dir": "in", "amount": 1.9, "hold_s": 1.0}]
+    prof = {"duration": 60, "analyzed_seconds": 60,
+            "zoom": {"events": ev, "confidence": 0.9, "analyzed_s": 60, "zoom_per_min": 2.0, "amount": 1.525}}
+    with db.get_conn() as c:
+        sid = c.execute("INSERT INTO learned_styles (name, source, profile, style) VALUES (?,?,?,?)",
+                        ("z", "z", json.dumps(prof), json.dumps({}))).lastrowid
+    r = client.post(f"/api/studio/styles/{sid}/zooms/toggle", json={"video": 0, "index": 1, "enabled": False})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["zoom"]["zoom_per_min"] == 1.0 and d["zoom"]["amount"] == 1.15
+    assert d["style"]["zoom_amount"] == 1.15
+    zooms = [e for e in learn.style_profile(sid)["edl"] if e["type"] == "zoom"]
+    assert [e["t"] for e in zooms] == [5.0]
+    assert client.post(f"/api/studio/styles/{sid}/zooms/toggle", json={"index": 9, "enabled": True}).status_code == 400

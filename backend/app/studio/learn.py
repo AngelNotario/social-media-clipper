@@ -487,7 +487,7 @@ def build_edl(prof: dict) -> list[dict]:
     # Zooms reales medidos (golpe o progresivo, con intensidad y duración)
     zm = prof.get("zoom") or {}
     measured_zoom = (zm.get("confidence") or 0) >= 0.4
-    for ev in zm.get("events") or [] if measured_zoom else []:
+    for ev in [e for e in zm.get("events") or [] if not e.get("off")] if measured_zoom else []:
         add(ev["t0"], "zoom", end=ev.get("t1"), kind=ev.get("kind"), dir=ev.get("dir"),
             amount=ev.get("amount"), hold_s=ev.get("hold_s"))
 
@@ -542,6 +542,8 @@ def to_style(prof: dict, base: dict | None = None) -> dict:
     if (d.get("zoomed_ratio") or 0) > 0.5:
         s["zoom_amount"] = max(s["zoom_amount"], 1.18)
     s.update(zoom_fields(prof))
+    if d:
+        s["caption_emojis"] = bool(d.get("emojis"))  # tu referencia usa emojis en los subtítulos: tú también
     if (e.get("flashes") or 0) >= 2:
         s["transition_style"] = "dinamico"
     elif (e.get("dips_to_black") or 0) >= 2:
@@ -929,6 +931,40 @@ def run_measure_zooms(job: dict, progress) -> dict:
     z = agg.get("zoom") or {}
     return {"style_id": sid, "measured": done, "missing": missing, "zoom_per_min": z.get("zoom_per_min"),
             "amount": z.get("amount"), "hold_s": z.get("hold_s"), "kind": style.get("zoom_kind")}
+
+
+def toggle_zoom(sid: int, video: int, index: int, enabled: bool) -> dict:
+    """Activa o desactiva a mano un zoom detectado (para quitar falsos positivos) y recalcula el estilo."""
+    from . import zoom_detect
+    ensure_schema()
+    with db.get_conn() as conn:
+        r = conn.execute("SELECT profile, style FROM learned_styles WHERE id = ?", (sid,)).fetchone()
+    if not r:
+        raise KeyError("estilo")
+    agg = json.loads(r["profile"])
+    videos = agg.get("videos") or [{"source": {"title": "video"}, "profile": agg}]
+    z = (videos[video]["profile"].get("zoom") or {})
+    ev = z.get("events") or []
+    if not 0 <= index < len(ev):
+        raise IndexError("zoom")
+    if enabled:
+        ev[index].pop("off", None)
+    else:
+        ev[index]["off"] = True
+    z.update(zoom_detect.summarize(ev, float(z.get("analyzed_s") or videos[video]["profile"].get("analyzed_seconds") or 60)))
+    if agg.get("videos"):
+        agg["zoom"] = combine([x["profile"] for x in videos]).get("zoom") or z
+    style = style_mod.clean_style({**json.loads(r["style"] or "{}"), **zoom_fields(agg)})
+    agg["edl"] = [e for e in agg.get("edl") or [] if e.get("type") != "zoom"]
+    for idx, v in enumerate(videos):
+        for e in build_edl(v["profile"]):
+            if e["type"] == "zoom":
+                agg["edl"].append({**e, "src": idx, "source": v["source"].get("title", f"video {idx + 1}")})
+    agg["edl"].sort(key=lambda e: (e["t"], e["type"]))
+    with db.get_conn() as conn:
+        conn.execute("UPDATE learned_styles SET profile = ?, style = ? WHERE id = ?",
+                     (json.dumps(agg, ensure_ascii=False), json.dumps(style), sid))
+    return {"zoom": agg.get("zoom"), "style": style}
 
 
 def list_styles() -> list[dict]:

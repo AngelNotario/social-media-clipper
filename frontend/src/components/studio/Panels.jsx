@@ -532,6 +532,7 @@ const STYLE_FIELDS = [
     ['caption_color', 'Color', 'color'],
     ['highlight_color', 'Color resaltado', 'color'],
     ['caption_uppercase', 'MAYÚSCULAS', 'bool'],
+    ['caption_emojis', 'Emojis a color', 'bool'],
   ]],
   ['Títulos y destacados', [
     ['title_font', 'Fuente', 'text'],

@@ -14,6 +14,7 @@ DEFAULT_STYLE = {
     "caption_position": "auto",        # auto (según el encuadre) | bottom | middle | top
     "caption_uppercase": True,
     "caption_max_words": 3,
+    "caption_emojis": False,           # emojis a color junto a las palabras clave que se dicen
     # Títulos y textos destacados
     "title_font": "Arial Black",
     "title_color": "#FFFFFF",

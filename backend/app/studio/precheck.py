@@ -30,6 +30,73 @@ def _first_luma(src: str, t: float) -> float | None:
         return None
 
 
+def shift_timeline(tl: dict, delta: float) -> None:
+    """Quita `delta` segundos del inicio del primer segmento y corre todo lo demás hacia atrás."""
+    segs = tl["tracks"]["video"]
+    if not segs or delta <= 0:
+        return
+    s0 = segs[0]
+    s0["src_in"] = round(float(s0["src_in"]) + delta, 3)
+    s0["fx"] = [dict(f, t=round(float(f["t"]) - delta, 3)) for f in s0.get("fx") or [] if float(f.get("t", 0)) - delta >= 0]
+    for s in segs[1:]:
+        s["start"] = round(max(0.0, float(s["start"]) - delta), 3)
+    words = []
+    for w in tl.get("words") or []:
+        a, b = float(w["start"]) - delta, float(w["end"]) - delta
+        if b > 0.02:
+            words.append({**w, "start": round(max(0.0, a), 3), "end": round(b, 3)})
+    tl["words"] = words
+    for name, items in tl["tracks"].items():
+        if name == "video":
+            continue
+        kept = []
+        for it in items:
+            st0 = float(it.get("start", 0)) - delta
+            if "end" in it:
+                en = float(it["end"]) - delta
+                if en <= 0.05:
+                    continue
+                it["end"] = round(en, 3)
+            elif st0 < 0:
+                continue  # un sonido puntual que caía en lo recortado
+            it["start"] = round(max(0.0, st0), 3)
+            kept.append(it)
+        tl["tracks"][name] = kept
+    tl["duration"] = round(max(0.1, float(tl.get("duration") or 0) - delta), 3)
+
+
+def trim_start(tl: dict, p: dict) -> list[str]:
+    """Recorta solo lo inútil del arranque: silencio antes de la primera palabra (> 0.5 s) e imagen negra.
+    Devuelve qué recortó. Nunca recorta más que el primer segmento."""
+    segs = tl["tracks"]["video"]
+    if not segs:
+        return []
+    meta = p.get("source_meta") or {}
+    s0 = segs[0]
+    room = float(s0["src_out"]) - float(s0["src_in"]) - 0.4
+    done = []
+    words = tl.get("words") or []
+    if words and meta.get("has_audio", True) and float(words[0]["start"]) > SILENCE_START_S:
+        d = min(float(words[0]["start"]) - 0.15, room)
+        if d > 0.2:
+            shift_timeline(tl, d)
+            room -= d
+            done.append(f"recorté {d:.1f} s de silencio al inicio")
+    covered = any(float(b.get("start", 9)) <= 0.2 for b in tl["tracks"].get("broll") or [])
+    src = p.get("source_path") or ""
+    if p.get("source_kind") == "video" and meta.get("has_video", True) and not covered and Path(src).exists():
+        d = 0.0
+        while d < min(2.0, room):
+            lum = _first_luma(src, float(s0["src_in"]) + d + 0.04)
+            if lum is None or lum >= 18:
+                break
+            d += 0.1
+        if d >= 0.1 and d < min(2.0, room):
+            shift_timeline(tl, d)
+            done.append(f"recorté {d:.1f} s de imagen negra al inicio")
+    return done
+
+
 def check(p: dict, target_s: float | None = None) -> tuple[dict, dict]:
     """Devuelve (timeline listo para renderizar, reporte {issues, fixed})."""
     tl = copy.deepcopy(p["timeline"])
@@ -40,7 +107,11 @@ def check(p: dict, target_s: float | None = None) -> tuple[dict, dict]:
     def issue(key: str, msg: str, level: str = "warn"):
         issues.append({"key": key, "level": level, "msg": msg})
 
-    # 1) gancho negro
+    # 0) recorte automático del arranque (silencio y negro): se arregla, no solo se avisa
+    fixed.extend(trim_start(tl, p))
+    dur = float(tl.get("duration") or 0)
+
+    # 1) gancho negro (si sigue negro tras recortar hasta 2 s, se avisa)
     segs = tl["tracks"]["video"]
     meta = p.get("source_meta") or {}
     if segs and p.get("source_kind") == "video" and meta.get("has_video", True) and Path(p.get("source_path") or "").exists():

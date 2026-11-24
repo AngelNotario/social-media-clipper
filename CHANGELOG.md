@@ -2,6 +2,18 @@
 
 Todos los cambios notables del proyecto se documentan en este archivo.
 
+## [v0.9.0] - Edición profesional tipo humano (2026-11-23)
+
+- **Cambio de hablante activo** (`editor/crop.py`): con dos o más personas se sigue a cada una por su posición y se mide cuánto se mueve su boca. Se encuadra a quien habla, con un corte al cambiar (no un paneo lento). El corte se adelanta al momento en que empezó a hablar. Una risa suelta no cambia la cámara. Sin bocas claras se queda con la cara más grande.
+- **Emojis a color en subtítulos** (`studio/emoji.py`): se dibujan como PNG con la fuente de emojis a color del sistema (Segoe UI Emoji en Windows) y se ponen encima del subtítulo mientras se dice la palabra. Salen de palabras que se dicen (diccionario fijo), como mucho uno cada 3.5 s. Opción «Emojis a color» en el estilo; se activa sola si tu referencia usa emojis.
+- **Recorte automático del arranque** (`precheck.trim_start`): el silencio antes de la primera palabra (> 0.5 s) y la imagen negra del inicio se recortan, no solo se avisan. Se corre todo el timeline (textos, sonidos, zooms). Se aplica al auto-editar (lo ves en el editor) y antes de cada render.
+- **Bucle de estilo por ritmo** (`style_judge.compare_edl`, `autoedit._apply_corrections`): antes copiaba eventos en los segundos exactos de la referencia, metía textos «...» y un recurso cualquiera. Ahora compara eventos por minuto y cadencia de cada tipo, y completa lo que falta en los momentos de énfasis de tu video: zooms, textos con las palabras que dices ahí y efectos de tu catálogo. No inventa recursos visuales.
+- **Pista de zooms**: en Mis estilos, cada video de referencia muestra sus zooms detectados como marcas; clic en una marca la quita o la vuelve a poner (falsos positivos) y el estilo se recalcula. En el timeline del editor se ven los zooms aplicados (morado = ritmo de tu referencia).
+- **Estilo completo**: la densidad de textos destacados sigue a tu referencia. La intensidad y duración medidas de los zooms ahora sí llegan al módulo de recursos.
+- **Juez absoluto de la referencia** (`style_judge.reference_check`): si la referencia tiene valores fuera de lo profesional (por ejemplo 30 efectos/min o un video casi estático), se usa el límite profesional en vez de copiar el defecto y se avisa en el reporte.
+- Reporte de edición: recortes del arranque, avisos del juez y nota de ritmo.
+- Pruebas: `test_speaker.py` (4), `test_emoji.py` (3), `test_rhythm.py` (3), más casos en `test_precheck.py`, `test_zoom_detect.py` y `test_studio.py`. Suite: 191 pasan.
+
 ## [v0.8.0] - Zooms reales de tu referencia y edición más profesional (2026-11-23)
 
 - `studio/zoom_detect.py`: mide los zooms reales de cámara de la referencia, cuadro a cuadro (ORB + escala afín con RANSAC, sin cruzar cortes de escena). Distingue zooms de golpe (punch) y progresivos (ramp), con intensidad, duración y zooms por minuto. Un paneo no cuenta como zoom.
@@ -254,3 +266,8 @@ Véase `README.md` y `docs/ESTADO_ACTUAL.md` para el estado de v0.4.
 ## [plan] - Mejora de edición IA tipo OpusClip (2026-11-23)
 
 - `docs/PLAN_MEJORA_EDICION_IA.md`: plan integral de mejora de la edición con modelos IA (detección real de zoom, prompts del director, b-roll semántico, rostro X+Y, subtítulos dinámicos, QA preventivo, modelos). Implementado en v0.8.0, salvo el cambio de hablante activo y los emojis en subtítulos (pendientes).
+
+## [plan] - Edición profesional tipo humano v0.9.0 (2026-11-23)
+
+- `docs/PLAN_EDICION_PROFESIONAL_V09.md`: plan para imitar edición humana profesional, no solo zooms.
+  Áreas: 1) cambio de hablante activo (detectar boca y encuadrar a quien habla); 2) emojis en subtítulos como imagen PNG para color real; 3) recorte automático de silencio inicial e inicio en negro; 4) bucle de estilo repartir eventos por ritmo relativo, no segundos exactos de referencia (`autoedit.py`); 5) pista visual de zooms de referencia en el editor; 6) estilo completo (cortes, textos, b-roll, audio) como editor humano; 7) juez absoluto estándar profesional. Criterios: dos personas sigue al hablante, emojis a color, sin inicio negro/silencio, eventos por ritmo, zooms verificables como pista, suite pytest verde. Implementado en v0.9.0.

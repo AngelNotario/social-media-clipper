@@ -190,6 +190,10 @@ export default function Timeline({ height, tl, assetsById, videosById = {}, sour
               <div className="tl-lane" style={{ width }} onMouseDown={(e) => { onSelect(null); seekFromEvent(e) }}>
                 {r.key === 'video' && view.tracks.video.map((s, i) =>
                   block('video', s, `seg ${s.zoom > 1 ? 'zoomed' : ''}`, `${i + 1}${s.zoom > 1 ? ` · zoom ${s.zoom}×` : ''}`))}
+                {r.key === 'video' && view.tracks.video.flatMap((s) => (s.fx || []).filter((f) => f.type === 'punch').map((f, k) => (
+                  <span key={`${s.id}z${k}`} className={`tl-zoom ${f.ref ? 'ref' : ''}`}
+                    style={{ left: (s.start + f.t) * pps, width: Math.max(3, ((f.rise || 0.12) + (f.hold || 1)) * pps) }}
+                    title={`🔍 Zoom ${Math.round((f.amount || 0) * 100)} % · ${(f.hold || 1).toFixed(1)} s${f.ref ? ' · ritmo de tu referencia' : ''}`} />)))}
                 {r.key === 'text' && view.tracks.text.map((t) => block('text', t, `txt k-${t.kind}`, t.text))}
                 {r.key === 'broll' && userBroll.map((b) => block('broll', b, `broll tr-${b.transition || 'cut'}`, assetsById[b.asset_id]?.title || videosById[b.video_id]?.title || 'Toma'))}
                 {r.key === 'ai' && bgSched.map((e) => block('bg', e, `ai bg ${e.kind === 'text' ? 'k-text' : ''}`,

@@ -448,7 +448,10 @@ export function StylesPanel({ notify }) {
                     <ul className="learn-videos small">
                       {s.profile.videos.map((v, i) => (
                         <li key={i}>{v.source.platform ? `[${v.source.platform}] ` : ''}{v.source.url ? <a href={v.source.url} target="_blank" rel="noreferrer">{v.source.title}</a> : v.source.title}
-                          <span className="muted"> · {v.profile.edit?.cuts_per_10s ?? '—'} cortes/10 s{v.profile.sound_pro?.sfx_per_min != null ? ` · ${v.profile.sound_pro.sfx_per_min} efectos/min` : ''}</span></li>
+                          <span className="muted"> · {v.profile.edit?.cuts_per_10s ?? '—'} cortes/10 s{v.profile.sound_pro?.sfx_per_min != null ? ` · ${v.profile.sound_pro.sfx_per_min} efectos/min` : ''}</span>
+                          {v.profile.zoom?.events?.length > 0 && <ZoomTrack z={v.profile.zoom} onToggle={async (index, enabled) => {
+                            try { await post(`/styles/${s.id}/zooms/toggle`, { video: i, index, enabled }); load() } catch (e) { notify(e.message, 'error') }
+                          }} />}</li>
                       ))}
                     </ul>
                   )}
@@ -468,6 +471,23 @@ export function StylesPanel({ notify }) {
       </div>
       <TastePanel notify={notify} />
       <KnowledgePanel notify={notify} />
+    </div>
+  )
+}
+
+// Zooms detectados en un video de referencia, como marcas sobre su duración. Clic = quitar/poner (falsos positivos).
+function ZoomTrack({ z, onToggle }) {
+  const len = Math.max(1, z.analyzed_s || Math.max(...z.events.map((e) => e.t1 || e.t0)) + 2)
+  const tc = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
+  return (
+    <div className="zoom-track" title="Zooms detectados. Clic en una marca para quitarla si no es un zoom de edición.">
+      {z.events.map((e, k) => (
+        <button key={k} type="button"
+          className={`zoom-mark ${e.dir === 'in' ? 'in' : 'out'} ${e.off ? 'off' : ''} ${e.kind === 'ramp' ? 'ramp' : ''}`}
+          style={{ left: `${(e.t0 / len) * 100}%`, width: e.kind === 'ramp' ? `${Math.max(0.6, ((e.t1 - e.t0) / len) * 100)}%` : undefined }}
+          title={`${tc(e.t0)} · ${e.dir === 'in' ? 'acerca' : 'aleja'} ${Math.round(Math.abs(e.amount - 1) * 100)} % · ${e.kind === 'ramp' ? 'progresivo' : 'de golpe'}${e.hold_s ? ` · ${e.hold_s} s` : ''}${e.off ? ' · QUITADO' : ''}`}
+          onClick={() => onToggle(k, !!e.off)} />
+      ))}
     </div>
   )
 }

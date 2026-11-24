@@ -205,16 +205,23 @@ def detect(path: Path, start: float = 0.0, dur: float = 180.0, scene_cuts: list[
         e.pop("i", None)
         e["t0"] = round(e["t0"] + start, 2)
         e["t1"] = round(e["t1"] + start, 2)
-    ins = [e for e in events if e["dir"] == "in"]
-    mins = max(len(frames) / FPS / 60, 1 / 60)
     out["events"] = events
-    out["zoom_per_min"] = round(len(ins) / mins, 2)
-    out["punch_per_min"] = round(sum(1 for e in ins if e["kind"] == "punch") / mins, 2)
-    if ins:
-        out["amount"] = round(float(np.median([e["amount"] for e in ins])), 3)
-        holds = [e["hold_s"] for e in ins if e.get("hold_s")]
-        out["hold_s"] = round(float(np.median(holds)), 2) if holds else None
-        out["kind"] = "punch" if out["punch_per_min"] >= out["zoom_per_min"] / 2 else "ramp"
-        gaps = np.diff([e["t0"] for e in ins])
-        out["median_gap_s"] = round(float(np.median(gaps)), 2) if len(gaps) else None
+    out.update(summarize(events, len(frames) / FPS))
     return out
+
+
+def summarize(events: list[dict], analyzed_s: float) -> dict:
+    """Ritmo de zooms de una lista de eventos (los desactivados a mano con "off" no cuentan)."""
+    ins = [e for e in events if e["dir"] == "in" and not e.get("off")]
+    mins = max(float(analyzed_s) / 60, 1 / 60)
+    res = {"zoom_per_min": round(len(ins) / mins, 2),
+           "punch_per_min": round(sum(1 for e in ins if e["kind"] == "punch") / mins, 2),
+           "amount": None, "hold_s": None, "kind": None, "median_gap_s": None}
+    if ins:
+        res["amount"] = round(float(np.median([e["amount"] for e in ins])), 3)
+        holds = [e["hold_s"] for e in ins if e.get("hold_s")]
+        res["hold_s"] = round(float(np.median(holds)), 2) if holds else None
+        res["kind"] = "punch" if res["punch_per_min"] >= res["zoom_per_min"] / 2 else "ramp"
+        gaps = np.diff([e["t0"] for e in ins])
+        res["median_gap_s"] = round(float(np.median(gaps)), 2) if len(gaps) else None
+    return res

@@ -139,8 +139,44 @@ def targets_for(style_id: int | None, video_type: str | None, edit_style: str | 
             out[k], src[k] = ref[k], "referencia"
         else:
             out[k], src[k] = pre.get(k), "preset"
+    for k in ("zoom_amount", "zoom_hold_s"):  # cómo son los zooms de tu referencia (si se midieron)
+        if ref.get(k) is not None:
+            out[k], src[k] = ref[k], "referencia"
     out["name"] = ref.get("name") or pre["name"]
     out["sources"] = src
+    out["reference_warnings"] = reference_check(out, video_type)
+    return out
+
+
+# Límites de una edición profesional (retención): fuera de esto, copiar la referencia empeora el video
+PRO_BOUNDS = {  # clave: (mínimo, máximo, por qué) — por tipo de video
+    "short": {"visual_changes_per_min": (6.0, 60.0, "cambios visuales"), "sfx_per_min": (0.0, 15.0, "efectos de sonido"),
+              "text_per_min": (0.0, 12.0, "textos en pantalla"), "zoom_per_min": (0.0, 20.0, "zooms")},
+    "long": {"visual_changes_per_min": (2.0, 30.0, "cambios visuales"), "sfx_per_min": (0.0, 8.0, "efectos de sonido"),
+             "text_per_min": (0.0, 6.0, "textos en pantalla"), "zoom_per_min": (0.0, 10.0, "zooms")},
+}
+
+
+def reference_check(targets: dict | None, video_type: str | None) -> list[dict]:
+    """Juez absoluto de la referencia: avisa si lo que se va a copiar está fuera de lo profesional, y en ese
+    caso usa el límite profesional en vez del valor de la referencia (no se copian defectos)."""
+    if not targets:
+        return []
+    bounds = PRO_BOUNDS["short" if video_type == "short" else "long"]
+    src = targets.get("sources") or {}
+    out = []
+    for k, (lo, hi, label) in bounds.items():
+        v = targets.get(k)
+        if not isinstance(v, (int, float)) or src.get(k) != "referencia":
+            continue
+        if v > hi:
+            out.append({"key": k, "value": v, "use": hi,
+                        "msg": f"Tu referencia tiene {v:g} {label}/min: demasiado para retener. Uso {hi:g}/min."})
+            targets[k] = hi
+        elif v < lo:
+            out.append({"key": k, "value": v, "use": lo,
+                        "msg": f"Tu referencia tiene solo {v:g} {label}/min: se siente estática. Uso {lo:g}/min."})
+            targets[k] = lo
     return out
 
 
@@ -488,71 +524,76 @@ def _cover_ratio(ref_spans: list[tuple[float, float]], mine_spans: list[tuple[fl
     return round(max(0.0, min(1.0, covered / rtot)), 3)
 
 
+POINT_GAP = {"caption": 3.0, "sfx": 4.0, "fx/punch": 2.5, "zoom": 2.5, "fx/zoom": 2.5, "fx/shake": 4.0,
+             "transition": 2.0}
+# tipos que se pueden completar sin inventar contenido (en momentos de énfasis del propio video)
+FILLABLE = {"caption", "sfx", "fx/punch", "zoom", "fx/zoom"}
+
+
+def _ref_minutes(ref_edl: list[dict]) -> float:
+    """Minutos analizados de la referencia (suma por video fuente, del último evento de cada uno)."""
+    from collections import defaultdict
+    ends: dict = defaultdict(float)
+    for e in ref_edl:
+        ends[e.get("src", 0)] = max(ends[e.get("src", 0)], float(e.get("end") or e["t"]))
+    return max(sum(ends.values()) / 60, 0.25)
+
+
+def _gaps(ts: list[float]) -> list[float]:
+    ts = sorted(ts)
+    return [b - a for a, b in zip(ts, ts[1:])]
+
+
 def compare_edl(ref_edl: list[dict], mine_edl: list[dict], dur: float) -> dict:
-    """Compara el desarme de referencia contra el timeline actual. Devuelve score 0-100, detalle por tipo y
-    correcciones aplicables (qué agregar y en qué segundo) para acercarse exactamente al estilo."""
+    """Compara el RITMO de la referencia con el timeline (no los segundos exactos: tu video dice otra cosa).
+
+    Por tipo de evento: cuántos por minuto (o qué parte del tiempo cubren, para rangos) y su cadencia
+    (separación típica entre eventos). Las correcciones dicen cuántos faltan de cada tipo; dónde ponerlos lo
+    decide quien corrige según los momentos de énfasis del propio video."""
     if not ref_edl:
         return {"score": 100.0, "by_type": {}, "corrections": [], "note": "sin referencia de desarme"}
     from collections import defaultdict
-    ref_by_type: dict[str, list[dict]] = defaultdict(list)
-    mine_by_type: dict[str, list[dict]] = defaultdict(list)
+    import statistics as stt
+    rmin = _ref_minutes(ref_edl)
+    mmin = max(float(dur) / 60, 0.1)
+    ref_by: dict[str, list[dict]] = defaultdict(list)
+    mine_by: dict[str, list[dict]] = defaultdict(list)
     for ev in ref_edl:
-        ref_by_type[ev["type"]].append(ev)
+        ref_by[ev["type"]].append(ev)
     for ev in mine_edl:
-        mine_by_type[ev["type"]].append(ev)
-
+        mine_by[ev["type"]].append(ev)
+    weights = {"cut": 3.0, "scene": 0.0, "caption": 2.0, "sfx": 1.5, "music": 1.0}
     by_type, corrections, tot, wsum = {}, [], 0.0, 0.0
-    for etype, revs in ref_by_type.items():
-        mes = mine_by_type.get(etype, [])
-        w = 1.0
-        if etype in ("cut", "scene"):
-            w = 3.0
-        elif etype.startswith("overlay/"):
-            w = 2.0
-        elif etype == "caption":
-            w = 2.0
-        elif etype == "sfx":
-            w = 1.5
-        elif etype == "music":
-            w = 1.0
-        elif etype in ("zoom", "transition") or etype.startswith("fx/"):
-            w = 1.0
-        else:
-            w = 0.75
-        # punto vs rango
-        is_range = etype in ("scene", "caption", "music", "bg") or etype.startswith("overlay/")
+    for etype, revs in ref_by.items():
+        w = weights.get(etype, 2.0 if etype.startswith("overlay/") else 1.0 if etype in ("zoom", "transition")
+                        or etype.startswith("fx/") else 0.75)
+        if w <= 0:
+            continue
+        mes = mine_by.get(etype, [])
+        is_range = etype in ("music", "bg") or etype.startswith("overlay/")
         if is_range:
-            ref_spans = [(float(e["t"]), float(e.get("end", e["t"]))) for e in revs if e.get("end", e["t"]) > e["t"] + 0.05]
-            mine_spans = [(float(e["t"]), float(e.get("end", e["t"]))) for e in mes if e.get("end", e["t"]) > e["t"] + 0.05]
-            score = _cover_ratio(ref_spans, mine_spans, dur)
-            # eventos de referencia sin cobertura -> corrección add
-            for e in revs:
-                a, b = float(e["t"]), float(e.get("end", e["t"]))
-                if b - a < 0.05:
-                    continue
-                hit = any(max(a, c) < min(b, d) for c, d in mine_spans)
-                if not hit:
-                    corrections.append({"op": "add_" + etype.replace("/", "_"), "t": round(a, 3),
-                                        "end": round(b, 3), "type": etype, "ref_t": round(a, 3),
-                                        "detail": e})
+            rcov = sum(max(0.0, float(e.get("end", e["t"])) - float(e["t"])) for e in revs) / (rmin * 60)
+            mcov = sum(max(0.0, float(e.get("end", e["t"])) - float(e["t"])) for e in mes) / (mmin * 60)
+            rcov, mcov = min(rcov, 1.0), min(mcov, 1.0)
+            score = 1.0 - min(1.0, abs(rcov - mcov) / max(rcov, 0.05))
+            by_type[etype] = {"ref_cover": round(rcov, 3), "mine_cover": round(mcov, 3), "score": round(score * 100, 1)}
         else:
-            ref_ts = [float(e["t"]) for e in revs]
-            mine_ts = [float(e["t"]) for e in mes]
-            hits = 0
-            used = set()
-            for rt in ref_ts:
-                mt = _match_point(rt, mine_ts, EDL_TOL)
-                if mt is not None:
-                    hits += 1
-                    used.add(mt)
-            score = hits / max(len(ref_ts), 1)
-            # eventos de referencia sin coincidencia -> corrección add en ese segundo
-            for e in revs:
-                rt = float(e["t"])
-                if _match_point(rt, mine_ts, EDL_TOL) is None:
-                    corrections.append({"op": "add_" + etype.replace("/", "_"), "t": round(rt, 3),
-                                        "type": etype, "ref_t": round(rt, 3), "detail": e})
-        by_type[etype] = {"ref": len(revs), "mine": len(mes), "score": round(score * 100, 1)}
+            rrate, mrate = len(revs) / rmin, len(mes) / mmin
+            rate_s = 1.0 - min(1.0, abs(rrate - mrate) / max(rrate, 0.5))
+            rg, mg = _gaps([float(e["t"]) for e in revs]), _gaps([float(e["t"]) for e in mes])
+            if len(rg) >= 2 and len(mg) >= 2:
+                rm, mm = stt.median(rg), stt.median(mg)
+                cad_s = 1.0 - min(1.0, abs(rm - mm) / max(rm, 0.5))
+            else:
+                cad_s = rate_s
+            score = 0.7 * rate_s + 0.3 * cad_s
+            want = int(round(rrate * mmin))
+            if etype in FILLABLE and want > len(mes):
+                corrections.append({"op": "fill_" + etype.replace("/", "_"), "type": etype, "count": want - len(mes),
+                                    "min_gap": POINT_GAP.get(etype, 2.0),
+                                    "detail": {"amount": stt.median([float(e.get("amount") or 0) for e in revs
+                                                                     if e.get("amount")] or [0.0]) or None}})
+            by_type[etype] = {"ref_per_min": round(rrate, 2), "mine_per_min": round(mrate, 2), "score": round(score * 100, 1)}
         tot += score * w
         wsum += w
     score = round(100 * tot / wsum, 1) if wsum else 0.0
@@ -560,7 +601,7 @@ def compare_edl(ref_edl: list[dict], mine_edl: list[dict], dur: float) -> dict:
 
 
 def edl_similarity(targets: dict, metrics: dict, ref_edl: list[dict], mine_edl: list[dict], dur: float) -> dict:
-    """Combina la nota de tasas (similarity) con la nota de desarme frame-accurate (compare_edl)."""
+    """Combina la nota de tasas (similarity) con la nota de ritmo del desarme (compare_edl)."""
     base = similarity(targets, metrics)
     edl = compare_edl(ref_edl, mine_edl, dur)
     # 60 % tasas, 40 % desarme frame-accurate
@@ -568,7 +609,7 @@ def edl_similarity(targets: dict, metrics: dict, ref_edl: list[dict], mine_edl: 
     advice = list(base.get("advice", []))
     for c in edl.get("corrections", [])[:12]:
         advice.append({"key": "edl:" + c["type"], "param": c["op"], "action": "more",
-                       "delta": 0.0, "why_es": f"Agrega {c['type']} en t={c['t']}s (estilo de referencia).",
+                       "delta": 0.0, "why_es": f"Faltan {c['count']} de tipo {c['type']} para el ritmo de tu referencia.",
                        "_w": 1.0, "_edl_correction": c})
     advice.sort(key=lambda a: -a.pop("_w", 0))
     return {"score": combined, "base_score": base["score"], "edl_score": edl["score"],

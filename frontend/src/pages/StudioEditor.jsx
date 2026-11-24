@@ -105,7 +105,7 @@ export default function StudioEditor({ pid, notify }) {
             const r = j.result
             notify(`Edición lista: ${r.segments} cortes, ${r.removed_seconds}s de silencios y muletillas eliminados`)
             if (r.ai?.warning) notify(r.ai.warning, 'error')
-            if (r.ai?.generative || r.ai?.sound || r.ai?.instructions || r.ai?.warning) setReport({ ai: r.ai })
+            if (r.ai?.generative || r.ai?.sound || r.ai?.instructions || r.ai?.warning || r.ai?.reference_warnings?.length || r.ai?.edl_loop) setReport({ ai: r.ai })
             if (view === 'render') render('preview')
           }
           if (w.kind === 'studio_reference') notify(`Ritmo aplicado: ${j.result.cuts_per_min} cortes/min. Pulsa “Auto-editar de nuevo” para usarlo.`)
@@ -305,6 +305,9 @@ export default function StudioEditor({ pid, notify }) {
                       return <p className="small">⏱️ Duración: {c.removed_blocks ? `${f(c.before)} → ${f(c.after)} (pediste ${f(c.target)}; quité ${c.removed_blocks} de ${c.blocks} partes, elegidas por ${c.method})` : `${f(c.before)}: ${c.note || 'sin recortar'}`}</p>
                     })()}
                     {report.ai?.warning && <p className="error-text small">⚠ {report.ai.warning}</p>}
+                    {report.ai?.reference_warnings?.map((w, k) => <p key={`rw${k}`} className="small">🧑‍⚖️ {w}</p>)}
+                    {Array.isArray(report.ai?.trim_start) && report.ai.trim_start.map((w, k) => <p key={`ts${k}`} className="small">✂ {w[0].toUpperCase() + w.slice(1)}</p>)}
+                    {report.ai?.edl_loop?.best_score != null && <p className="small">🎚 Ritmo de tu referencia: {Math.round(report.ai.edl_loop.best_score)} %</p>}
                     {report.ai?.reference_zooms > 0 && <p className="small">🔍 {report.ai.reference_zooms} zooms puestos en tus momentos de énfasis, con la intensidad y duración de tu referencia</p>}
                     {report.ai?.sound && !report.ai.sound.error && <p className="small">🎧 Sonido: {report.ai.sound.summary}</p>}
                     {report.ai?.instructions?.error && <p className="error-text small">Tus instrucciones no se pudieron aplicar: {report.ai.instructions.error}</p>}

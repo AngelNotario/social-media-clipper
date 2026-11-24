@@ -887,6 +887,23 @@ def style_measure_zooms(sid: int):
     return jobs.enqueue("studio_zooms", params={"style_id": sid})
 
 
+class ZoomToggleReq(BaseModel):
+    video: int = 0
+    index: int
+    enabled: bool
+
+
+@router.post("/styles/{sid}/zooms/toggle")
+def style_toggle_zoom(sid: int, req: ZoomToggleReq):
+    """Quita (o vuelve a poner) un zoom detectado que no era de edición; el estilo se recalcula."""
+    try:
+        return learn.toggle_zoom(sid, req.video, req.index, req.enabled)
+    except KeyError:
+        raise HTTPException(404, "Estilo no encontrado.")
+    except (IndexError, KeyError, TypeError):
+        raise HTTPException(400, "Ese zoom no existe.")
+
+
 @router.delete("/styles/{sid}")
 def delete_style(sid: int):
     learn.ensure_schema()

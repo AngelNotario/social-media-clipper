@@ -138,7 +138,7 @@ def test_generative_with_learned_style_runs_strict_judge(client, monkeypatch):
                                "face_side": "left"})
     strict = [r for r in info["rounds"] if r.get("strict")]
     assert strict and "error" not in strict[0], strict
-    assert info["goal"] == 80.0
+    assert info["goal"] >= 80.0  # la meta puede subir (p. ej. 90 % con estilo aprendido)
     assert all(not s.get("fx") or all(f["type"] != "zoom" for f in s["fx"]) for s in tl["tracks"]["video"])
 
 

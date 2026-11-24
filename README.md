@@ -14,6 +14,7 @@
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white">
   <img alt="FFmpeg" src="https://img.shields.io/badge/FFmpeg-NVENC-007808?logo=ffmpeg&logoColor=white">
   <img alt="IA local" src="https://img.shields.io/badge/IA-100%25%20local-ec4899">
+  <a href="https://github.com/AngelNotario/social-media-clipper/actions/workflows/ci.yml"><img alt="Pruebas" src="https://github.com/AngelNotario/social-media-clipper/actions/workflows/ci.yml/badge.svg"></a>
 </p>
 
 <p align="center">

@@ -49,3 +49,6 @@ backend/ytcheck.py
 
 # Contraseña del túnel
 tools/tunnel/tunnel_pass.txt
+
+# Instrucciones locales para mover las plantillas
+.github/LEEME.md
